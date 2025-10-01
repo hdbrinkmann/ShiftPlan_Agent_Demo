@@ -8,13 +8,16 @@ def log(state: PlanState, message: str) -> None:
     state.setdefault("logs", []).append(message)
 
 def ingest_node(state: PlanState) -> PlanState:
-    employees, absences = ingest_svc.parse_sources()
+    employees, absences, demand = ingest_svc.parse_sources()
     new_state: PlanState = {
         **state,
         "status": "INGESTED",
         "employees": employees,
         "absences": absences,
     }
+    # Store demand if any was loaded from Excel
+    if demand:
+        new_state["demand"] = demand
     log(new_state, "Ingested employees and absences.")
     return new_state
 
@@ -35,14 +38,19 @@ def rules_node(state: PlanState) -> PlanState:
     return new_state
 
 def demand_node(state: PlanState) -> PlanState:
-    # Stub: one store, two roles, simple day demand
-    demand = [
-        {"day": "Mon", "time": "09:00-13:00", "role": "cashier", "qty": 2},
-        {"day": "Mon", "time": "13:00-18:00", "role": "cashier", "qty": 2},
-        {"day": "Mon", "time": "09:00-18:00", "role": "sales", "qty": 1},
-    ]
-    new_state: PlanState = {**state, "demand": demand}
-    log(new_state, "Expanded core requirements into demand.")
+    # Use demand from ingestion if already set, otherwise use stub
+    if state.get("demand"):
+        new_state: PlanState = {**state}
+        log(new_state, "Using demand from Excel ingestion.")
+    else:
+        # Stub: one store, two roles, simple day demand
+        demand = [
+            {"day": "Mon", "time": "09:00-13:00", "role": "cashier", "qty": 2},
+            {"day": "Mon", "time": "13:00-18:00", "role": "cashier", "qty": 2},
+            {"day": "Mon", "time": "09:00-18:00", "role": "sales", "qty": 1},
+        ]
+        new_state = {**state, "demand": demand}
+        log(new_state, "Expanded core requirements into demand.")
     return new_state
 
 def solve_node(state: PlanState) -> PlanState:
