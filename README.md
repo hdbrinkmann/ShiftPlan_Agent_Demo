@@ -11,8 +11,35 @@ Quickstart
    GET /
    POST /run with body: {"auto_approve": true}
 
+## Using your own Excel
+
+The application reads shift planning data from `./datafiles/Simple_Shift_Plan_Request.xlsx` with the following schema:
+
+### Employees Sheet (Required)
+- **id** (optional): Employee identifier. Auto-generated from row number if blank.
+- **name** (required): Employee name.
+- **hourly_cost** or **hourly_rate** (required): Cost per hour (flexible column name).
+- **max_hours_week** (optional): Maximum weekly hours for the employee.
+- **skills** (optional): Comma or semicolon-separated list of skills (e.g., "cashier,sales").
+
+### Absences Sheet (Optional)
+- **employee_id** or **name**: Employee identifier (matches Employees sheet).
+- **date** (required): Absence date in YYYY-MM-DD format.
+- **start_time** (required): Start time in HH:MM format.
+- **end_time** (required): End time in HH:MM format.
+- **type** (optional): Type of absence (e.g., "vacation", "sick").
+
+### Demand Sheet (Required)
+- **day** (required): Day of week (Mon, Tue, Wed, etc.) or date in YYYY-MM-DD format.
+- **start_time** (required): Shift start time in HH:MM format.
+- **end_time** (required): Shift end time in HH:MM format.
+- **role** (required): Required role/skill for the shift.
+- **qty** or **required** (required): Number of employees needed (flexible column name).
+
+### Fallback Behavior
+If the Excel file or required sheets are missing or malformed, the application automatically falls back to built-in stub data and continues to run. Logs will indicate whether data came from Excel or stub sources.
+
 How to extend
-- Replace services/ingest.py with real Excel parsing (pandas/openpyxl).
 - Replace services/solver.py with an OR-Tools CP-SAT model.
 - Expand services/audit.py with hard rule checks and severity tags.
 - Expand services/kpi.py with costs, utilization, coverage, fairness.

@@ -8,13 +8,16 @@ def log(state: PlanState, message: str) -> None:
     state.setdefault("logs", []).append(message)
 
 def ingest_node(state: PlanState) -> PlanState:
-    employees, absences = ingest_svc.parse_sources()
+    employees, absences, demand = ingest_svc.parse_sources()
     new_state: PlanState = {
         **state,
         "status": "INGESTED",
         "employees": employees,
         "absences": absences,
     }
+    # Store demand if any was loaded from Excel
+    if demand:
+        new_state["demand"] = demand
     log(new_state, "Ingested employees and absences.")
     return new_state
 
@@ -35,14 +38,19 @@ def rules_node(state: PlanState) -> PlanState:
     return new_state
 
 def demand_node(state: PlanState) -> PlanState:
-    # Stub: one store, two roles, simple day demand
-    demand = [
-        {"day": "Mon", "time": "09:00-13:00", "role": "cashier", "qty": 2},
-        {"day": "Mon", "time": "13:00-18:00", "role": "cashier", "qty": 2},
-        {"day": "Mon", "time": "09:00-18:00", "role": "sales", "qty": 1},
-    ]
-    new_state: PlanState = {**state, "demand": demand}
-    log(new_state, "Expanded core requirements into demand.")
+    # Use demand from ingestion if already set, otherwise use stub
+    if state.get("demand"):
+        new_state: PlanState = {**state}
+        log(new_state, "Using demand from Excel ingestion.")
+    else:
+        # Stub: one store, two roles, simple day demand
+        demand = [
+            {"day": "Mon", "time": "09:00-13:00", "role": "cashier", "qty": 2},
+            {"day": "Mon", "time": "13:00-18:00", "role": "cashier", "qty": 2},
+            {"day": "Mon", "time": "09:00-18:00", "role": "sales", "qty": 1},
+        ]
+        new_state = {**state, "demand": demand}
+        log(new_state, "Expanded core requirements into demand.")
     return new_state
 
 def solve_node(state: PlanState) -> PlanState:
@@ -94,4 +102,33 @@ def triage_node(state: PlanState) -> PlanState:
         if over_budget:
             relaxations.append({"type": "increase_max_hours_per_day", "to": 8.5, "reason": "Reduce staffing peaks"})
     new_state: PlanState = {
+        **state,
+        "relaxations": relaxations,
+        "needs_approval": needs,
+    }
+    log(new_state, f"Triage complete. Needs approval: {needs}.")
+    return new_state
+
+def human_gate_node(state: PlanState, auto_approve: bool = False) -> PlanState:
+    if auto_approve:
+        new_state: PlanState = {**state, "awaiting_approval": False}
+        log(new_state, "Human gate: auto-approved.")
+    else:
+        new_state = {**state, "awaiting_approval": True}
+        log(new_state, "Human gate: awaiting approval.")
+    return new_state
+
+def export_node(state: PlanState) -> PlanState:
+    new_state: PlanState = {**state, "status": "FINALIZED", "exported": True}
+    log(new_state, "Exported final schedule.")
+    return new_state
+
+def decide_after_kpi(state: PlanState) -> str:
+    violations = state.get("audit", {}).get("violations", [])
+    budget = state.get("kpis", {}).get("budget")
+    over_budget = False
+    if budget is not None:
+        over_budget = (state.get("kpis", {}).get("cost", 0) or 0) > budget
+    needs_triage = bool(violations) or over_budget
+    return "triage" if needs_triage else "export"
 
