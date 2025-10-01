@@ -1,23 +1,105 @@
-# Shift Planning Sample (LangGraph)
+# ShiftPlan Agent Demo
 
-This sample wires a LangGraph agentic workflow for generating a shift plan.
-It uses stubbed nodes and services so you can focus on the orchestration first and then replace stubs with real logic (Excel parsing, OR-Tools solver, audits, KPIs).
+Diese Demo zeigt, wie ein kleiner „Agenten‑Schwarm“ gemeinsam einen Schichtplan erstellt – von den Eingangsdaten (Excel) bis zum fertigen Ergebnis im Browser. Zielgruppe sind Nicht‑Techniker: alles ist absichtlich einfach und nachvollziehbar erklärt.
 
-Quickstart
-1) Install (Codespaces runs postCreateCommand to install deps automatically)
-2) Run API
-   uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000
-3) Open the forwarded port (Codespaces will prompt) and call:
-   GET /
-   POST /run with body: {"auto_approve": true}
+## Was die Anwendung tut – in einem Satz
 
-How to extend
-- Replace services/ingest.py with real Excel parsing (pandas/openpyxl).
-- Replace services/solver.py with an OR-Tools CP-SAT model.
-- Expand services/audit.py with hard rule checks and severity tags.
-- Expand services/kpi.py with costs, utilization, coverage, fairness.
-- Add a persistent checkpointer (SQLite/Postgres) and artifact storage.
+Sie lädt Mitarbeiter‑, Abwesenheits‑ und Öffnungszeiten‑Bedarf aus Excel, verteilt die passenden Mitarbeiter kostengünstig auf die Zeitblöcke (Store Manager inkl. Assistant als Ersatz, Sales), prüft Regeln und zeigt das Ergebnis als Tabelle im Browser.
 
-Human-in-the-loop
-- The sample uses an auto_approve flag in /run body to pass the "human gate."
-- For production, add a checkpointer and expose an endpoint to resume the graph after a pause/approval.
+## So startest du die Demo
+
+1) Voraussetzungen installieren
+    - Python 3.11
+    - Im Projektordner ein virtuelles Environment anlegen und Abhängigkeiten installieren (siehe requirements.txt)
+
+2) Server starten
+    - Start im Projektstamm: `python3 -m uvicorn app.api.main:app --host 127.0.0.1 --port 7001`
+
+3) Browser öffnen
+    - UI unter `http://127.0.0.1:7001/ui/`
+    - Dort die Excel hochladen und anschließend „Run“ ausführen.
+
+## Die Agenten – wer macht was?
+
+Die Logik ist als Kette von „Agenten“ (Knoten) umgesetzt. Jeder Agent hat eine klar umrissene Aufgabe:
+
+- Ingest‑Agent (`ingest_node`)
+   - Aufgabe: Eingabedaten laden. Wenn du eine Excel hochlädst, werden Mitarbeiter, Abwesenheiten und der Bedarf (Headcount je Zeitblock) daraus entnommen.
+   - Ergebnis: Eine saubere Liste von Mitarbeitern (inkl. Kosten pro Stunde und Rollen/Skills), Abwesenheiten und Bedarfszeilen.
+
+- Regel‑Agent (`rules_node`)
+   - Aufgabe: Einfache Regeln definieren, z. B. max. Stunden pro Tag, Ruhezeit zwischen Tagen, Skill‑Pflicht.
+   - Ergebnis: Ein „Constraints“-Paket, das alle weiteren Agenten kennen.
+
+- Demand‑Agent (`demand_node`)
+   - Aufgabe: Den Bedarf zusammenstellen. Bei einem „Opening Hours“-Blatt werden die Rollen als Spalten gelesen (z. B. „Store Manager“, „Sales“) – die Zahlen sind Headcount.
+   - Ergebnis: Eine Liste von Zeilen wie: Tag, Zeitspanne, Rolle, Anzahl.
+
+- Solver‑Agent (`solve_node`)
+   - Aufgabe: Mitarbeiter auf die Bedarfsspitzen verteilen – kostengünstig und regelkonform.
+   - Vorgehen (vereinfacht):
+      - Für „Store Manager“ werden zuerst echte Store Manager besetzt, danach Assistant/Deputy als Ersatz.
+      - Für „Sales“ werden Sales‑Profile genommen; optional darf „Cashier“ aushelfen.
+      - Kandidaten werden nach (Trefferqualität, Kosten) und einem kleinen Fairness‑Anteil sortiert. Eine leichte Rotation verhindert, dass immer dieselben zuerst genommen werden.
+      - Doppelbelegung derselben Person im identischen Zeitblock wird verhindert. Abwesenheiten und einfache Max‑Stunden‑/Ruhezeit‑Regeln werden berücksichtigt.
+   - Ergebnis: Eine Liste von „Assignments“ mit Tag, Zeit, Rolle, Mitarbeiter, Stunden und Kosten/h.
+
+- Audit‑Agent (`audit_node`)
+   - Aufgabe: Prüft, ob der Bedarf je Block wirklich abgedeckt ist (z. B. Headcount erfüllt).
+   - Ergebnis: Liste von Abweichungen (z. B. Unterdeckung) für die spätere Bewertung.
+
+- KPI‑Agent (`kpi_node`)
+   - Aufgabe: Einfache Kennzahlen berechnen – v. a. Gesamtkosten und Abdeckungsgrad.
+   - Ergebnis: KPIs anzeigen, damit man sieht, ob die Lösung „gut genug“ ist.
+
+- Triage‑Agent (`triage_node`) und Human‑Gate (`human_gate_node`)
+   - Aufgabe: Wenn Regeln verletzt oder Budget überschritten ist, schlägt die Triage kleine Lockerungen vor (z. B. +0,5 Stunden max/Tag). Der Human‑Gate entscheidet: automatisch freigeben (Demo) oder auf Freigabe warten.
+
+- Export‑Agent (`export_node`)
+   - Aufgabe: Abschluss der Planung (in der Demo nur ein „ok“ – hier könnte ein Export in Excel/CSV/ERP folgen).
+
+Die UI zeigt parallel live, welcher Agent gerade aktiv ist und was er tut (SSE‑Telemetrie).
+
+## Wie ist das mit LangGraph umgesetzt?
+
+Stell dir die Agenten wie Stationen auf einer Kette vor. LangGraph erlaubt, diese Stationen klar zu definieren und zu verbinden:
+
+- Wir bauen einen Graphen mit festen Knoten (Ingest → Regeln → Bedarf → Solver → Audit → KPI …).
+- Zwischen den Knoten laufen einfache Datenpakete („State“). Jeder Knoten liest, was er braucht (z. B. Mitarbeiter, Bedarf) und hängt sein Ergebnis an.
+- Nach dem KPI‑Agenten entscheidet eine einfache „Weiche“: Wenn alles passt, geht’s direkt zum Export. Wenn nicht, geht’s über Triage und (optional) Human‑Gate zurück zum Lösen.
+- Jeder Knoten meldet Status‑Informationen (per Ereignissen) an die UI, damit man den Verlauf live mitlesen kann.
+
+Das klingt technisch, ist aber im Kern simpel: eine Pipeline aus Arbeitsschritten, die jeweils ihr Teilergebnis anreichern und zusammen ein Ziel erreichen: einen praktikablen Schichtplan.
+
+## Excel‑Upload – worauf achten?
+
+- Mitarbeitende: Spalten wie Name, eine Rollen-/Positionsangabe (z. B. „Store Manager“, „Assistant Store Manager“, „Sales“) und „Cost per hour in EUR“ (wird automatisch erkannt). Fehlt die „Skills“-Spalte, interpretieren wir die Position als Skill.
+- Abwesenheiten: optional, aber hilfreich (Tag, von/bis, Typ).
+- Bedarf (z. B. Blatt „Opening Hours“): Spalten für Datum/Tag und „From/To“ für die Zeit. Rollen (Store Manager, Sales, …) als Spalten; die Zahlen sind der Headcount.
+
+## Kosten, Regeln und Kennzahlen
+
+- Kosten: Summe aus „Stunden im Block × Kosten pro Stunde“ über alle Zuteilungen (pro Mitarbeiter). Stundensätze werden robust aus der Excel gelesen (verschiedene Schreibweisen werden erkannt).
+- Regeln: Einfach gehalten, aber wirksam – Skill‑Match, keine Doppelbelegung im selben Zeitblock, Abwesenheiten, max. Stunden pro Tag/Woche (falls gesetzt), und Ruhezeiten zwischen Tagen.
+- KPIs: Gesamtkosten und Abdeckungsgrad (wie viel des Headcounts pro Block abgedeckt wurde).
+
+## LLM‑Integration (optional)
+
+Ein einfacher Client für Scaleway‑LLM ist dabei. Wenn keine Zugangsdaten gesetzt sind, läuft die Demo offline weiter (es gibt dann nur einfache Textzusammenfassungen/Fallbacks). Das LLM ist nicht kritisch für den Plan – es kommentiert eher Schritte oder könnte später für Erklärungen genutzt werden.
+
+## Endpunkte & UI
+
+- UI: `GET /ui/` → Upload, Start, Live‑Verlauf, Ergebnis‑Tabelle.
+- API:
+   - `POST /upload` → Excel hochladen.
+   - `POST /run` → Graph ausführen (JSON‑Body: `{ "auto_approve": true }`).
+   - `POST /result` → Liefert die Ergebnis‑HTML mit Tabelle.
+   - `GET /inspect` → Zeigt die geladenen Daten (Counts/Samples).
+
+## Grenzen der Demo und Ausblick
+
+- Der Solver ist bewusst einfach (greedy), liefert aber schon brauchbare Ergebnisse. Für komplexe Pläne kann ein Optimierer (z. B. OR‑Tools) eingebaut werden.
+- Die Regeln sind minimal und können erweitert werden (Pausen, Tarifregeln, Schichtfolgen, Wünsche …).
+- Export ist aktuell ein Platzhalter – hier ließen sich Dateien oder System‑Schnittstellen anbinden.
+
+Die Stärke der Lösung liegt in der klaren Struktur: Jeder Schritt ist eigenständig und nachvollziehbar. Dadurch kann man die Logik Schritt für Schritt verfeinern, ohne das Gesamtsystem zu verkomplizieren.
