@@ -5,3 +5,6 @@ langgraph
 pandas
 openpyxl
 ortools
+httpx
+python-dotenv
+python-multipart

@@ -4,6 +4,7 @@ class PlanState(TypedDict, total=False):
     # Lifecycle
     status: str  # INIT, INGESTED, CONSTRAINED, SOLVED, VALIDATED, REVIEW, FINALIZED
     logs: List[str]
+    steps: List[str]
 
     # Data entities (use refs to large tables in real app)
     employees: List[Dict[str, Any]]
