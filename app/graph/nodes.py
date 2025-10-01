@@ -94,4 +94,33 @@ def triage_node(state: PlanState) -> PlanState:
         if over_budget:
             relaxations.append({"type": "increase_max_hours_per_day", "to": 8.5, "reason": "Reduce staffing peaks"})
     new_state: PlanState = {
+        **state,
+        "relaxations": relaxations,
+        "needs_approval": needs,
+    }
+    log(new_state, f"Triage complete. Needs approval: {needs}.")
+    return new_state
+
+def human_gate_node(state: PlanState, auto_approve: bool = False) -> PlanState:
+    if auto_approve:
+        new_state: PlanState = {**state, "awaiting_approval": False}
+        log(new_state, "Human gate: auto-approved.")
+    else:
+        new_state = {**state, "awaiting_approval": True}
+        log(new_state, "Human gate: awaiting approval.")
+    return new_state
+
+def export_node(state: PlanState) -> PlanState:
+    new_state: PlanState = {**state, "status": "FINALIZED", "exported": True}
+    log(new_state, "Exported final schedule.")
+    return new_state
+
+def decide_after_kpi(state: PlanState) -> str:
+    violations = state.get("audit", {}).get("violations", [])
+    budget = state.get("kpis", {}).get("budget")
+    over_budget = False
+    if budget is not None:
+        over_budget = (state.get("kpis", {}).get("cost", 0) or 0) > budget
+    needs_triage = bool(violations) or over_budget
+    return "triage" if needs_triage else "export"
 
