@@ -23,5 +23,6 @@ def run(req: RunRequest):
         "kpis": {"budget": req.budget} if req.budget is not None else {},
         "logs": [],
     }
-    final_state = graph.invoke(initial_state, config={"auto_approve": req.auto_approve})
+    config = {"configurable": {"auto_approve": req.auto_approve}}
+    final_state = graph.invoke(initial_state, config=config)
     return final_state
