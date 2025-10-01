@@ -19,3 +19,4 @@ class PlanState(TypedDict, total=False):
     awaiting_approval: bool
     relaxations: List[Dict[str, Any]]
     exported: bool
+    iteration: int  # Track solve iterations to prevent infinite loops

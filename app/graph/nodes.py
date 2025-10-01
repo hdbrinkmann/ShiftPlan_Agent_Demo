@@ -46,14 +46,15 @@ def demand_node(state: PlanState) -> PlanState:
     return new_state
 
 def solve_node(state: PlanState) -> PlanState:
+    iteration = state.get("iteration", 0) + 1
     solution = solver_svc.solve(
         employees=state.get("employees", []),
         absences=state.get("absences", []),
         constraints=state.get("constraints", {}),
         demand=state.get("demand", []),
     )
-    new_state: PlanState = {**state, "status": "SOLVED", "solution": solution}
-    log(new_state, "Solved schedule (stub).")
+    new_state: PlanState = {**state, "status": "SOLVED", "solution": solution, "iteration": iteration}
+    log(new_state, f"Solved schedule (stub), iteration={iteration}.")
     return new_state
 
 def audit_node(state: PlanState) -> PlanState:
@@ -80,18 +81,83 @@ def kpi_node(state: PlanState) -> PlanState:
 
 def triage_node(state: PlanState) -> PlanState:
     # Decide minimal relaxations if violations or over budget
+    iteration = state.get("iteration", 0)
     budget = state.get("kpis", {}).get("budget")
     violations = state.get("audit", {}).get("violations", [])
     over_budget = False
     if budget is not None:
         over_budget = (state.get("kpis", {}).get("cost", 0) or 0) > budget
 
-    needs = bool(violations) or over_budget
-    relaxations = []
-    if needs:
-        if violations:
-            relaxations.append({"type": "allow_short_coverage", "limit": 1, "reason": "Minor coverage gap"})
-        if over_budget:
-            relaxations.append({"type": "increase_max_hours_per_day", "to": 8.5, "reason": "Reduce staffing peaks"})
+    # If we've already tried more than once, don't loop again (stub solver won't improve)
+    if iteration > 1:
+        needs = False
+        relaxations = []
+        log_msg = f"Triage: iteration={iteration}, skipping further relaxations (stub solver)."
+    else:
+        needs = bool(violations) or over_budget
+        relaxations = []
+        if needs:
+            if violations:
+                relaxations.append({"type": "allow_short_coverage", "limit": 1, "reason": "Minor coverage gap"})
+            if over_budget:
+                relaxations.append({"type": "increase_max_hours_per_day", "to": 8.5, "reason": "Reduce staffing peaks"})
+        log_msg = f"Triage: needs_approval={needs}, relaxations={len(relaxations)}."
+    
     new_state: PlanState = {
+        **state,
+        "needs_approval": needs,
+        "relaxations": relaxations,
+    }
+    log(new_state, log_msg)
+    return new_state
+
+def human_gate_node(state: PlanState, auto_approve: bool = False) -> PlanState:
+    # If auto_approve, apply relaxations and continue; else mark awaiting_approval
+    if auto_approve:
+        # Apply relaxations
+        constraints = state.get("constraints", {})
+        for r in state.get("relaxations", []):
+            if r["type"] == "increase_max_hours_per_day":
+                constraints.setdefault("hard", {})["max_hours_per_day"] = r["to"]
+            elif r["type"] == "allow_short_coverage":
+                constraints.setdefault("soft", {})["allow_short_coverage"] = r["limit"]
+        new_state: PlanState = {
+            **state,
+            "status": "REVIEW",
+            "needs_approval": False,
+            "awaiting_approval": False,
+            "constraints": constraints,
+        }
+        log(new_state, "Human gate: auto-approved relaxations.")
+        return new_state
+    else:
+        new_state: PlanState = {
+            **state,
+            "status": "REVIEW",
+            "awaiting_approval": True,
+        }
+        log(new_state, "Human gate: awaiting manual approval.")
+        return new_state
+
+def export_node(state: PlanState) -> PlanState:
+    # Mark as exported and finalized
+    new_state: PlanState = {
+        **state,
+        "status": "FINALIZED",
+        "exported": True,
+    }
+    log(new_state, "Exported final plan.")
+    return new_state
+
+def decide_after_kpi(state: PlanState) -> str:
+    # If no violations and within budget, go directly to export
+    violations = state.get("audit", {}).get("violations", [])
+    budget = state.get("kpis", {}).get("budget")
+    over_budget = False
+    if budget is not None:
+        over_budget = (state.get("kpis", {}).get("cost", 0) or 0) > budget
+    
+    if not violations and not over_budget:
+        return "export"
+    return "triage"
 

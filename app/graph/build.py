@@ -24,7 +24,10 @@ def build_graph():
     graph.add_node("kpi", kpi_node)
     graph.add_node("triage", triage_node)
     # human_gate needs access to config (auto_approve)
-    def human_gate_with_cfg(state: PlanState, *, auto_approve: bool = False):
+    def human_gate_with_cfg(state: PlanState, config=None):
+        auto_approve = False
+        if config and "configurable" in config:
+            auto_approve = config["configurable"].get("auto_approve", False)
         return human_gate_node(state, auto_approve=auto_approve)
     graph.add_node("human_gate", human_gate_with_cfg)
     graph.add_node("export", export_node)
@@ -36,10 +39,10 @@ def build_graph():
     graph.add_edge("solve", "audit")
     graph.add_edge("audit", "kpi")
     graph.add_conditional_edges("kpi", decide_after_kpi, {"triage": "triage", "export": "export"})
-    # If triage sets needs_approval:
+    # If triage sets needs_approval, go to human_gate; else export (done trying)
     def after_triage(state: PlanState) -> str:
-        return "human_gate" if state.get("needs_approval") else "solve"
-    graph.add_conditional_edges("triage", after_triage, {"human_gate": "human_gate", "solve": "solve"})
+        return "human_gate" if state.get("needs_approval") else "export"
+    graph.add_conditional_edges("triage", after_triage, {"human_gate": "human_gate", "export": "export"})
     # After human_gate, either loop back to solve (if approved) or end waiting:
     def after_gate(state: PlanState) -> str:
         return "solve" if not state.get("awaiting_approval") else END
