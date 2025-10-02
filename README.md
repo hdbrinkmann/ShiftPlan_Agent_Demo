@@ -1,156 +1,156 @@
 # ShiftPlan Agent Demo
 
-Diese Demo zeigt, wie ein kleiner „Agenten‑Schwarm“ gemeinsam einen Schichtplan erstellt – von den Eingangsdaten (Excel) bis zum fertigen Ergebnis im Browser. Zielgruppe sind Nicht‑Techniker: alles ist absichtlich einfach und nachvollziehbar erklärt.
+This demo shows how a small "agent swarm" collaboratively creates a shift plan – from input data (Excel) to the finished result in the browser. The target audience is non-technical users: everything is intentionally explained in a simple and comprehensible way.
 
-## Was die Anwendung tut – in einem Satz
+## What the Application Does – In One Sentence
 
-Sie lädt Mitarbeiter‑, Abwesenheits‑ und Öffnungszeiten‑Bedarf aus Excel, verteilt die passenden Mitarbeiter kostengünstig auf die Zeitblöcke (Store Manager inkl. Assistant als Ersatz, Sales), prüft Regeln und zeigt das Ergebnis als Tabelle im Browser.
+It loads employee, absence, and opening hours requirements from Excel, cost-effectively assigns the right employees to time blocks (Store Manager including Assistant as backup, Sales), checks rules, and displays the result as a table in the browser.
 
-## So startest du die Demo
+## How to Start the Demo
 
-1) Voraussetzungen installieren
+1) Install Prerequisites
     - Python 3.11
-    - Im Projektordner ein virtuelles Environment anlegen und Abhängigkeiten installieren (siehe requirements.txt)
+    - Create a virtual environment in the project folder and install dependencies (see requirements.txt)
 
-2) Server starten
-    - Start im Projektstamm: `python3 -m uvicorn app.api.main:app --host 127.0.0.1 --port 7001`
+2) Start Server
+    - Start from project root: `python3 -m uvicorn app.api.main:app --host 127.0.0.1 --port 7001`
 
-3) Browser öffnen
-    - UI unter `http://127.0.0.1:7001/ui/`
-    - Dort die Excel hochladen und anschließend „Run“ ausführen.
+3) Open Browser
+    - UI at `http://127.0.0.1:7001/ui/`
+    - Upload the Excel file there and then execute "Run".
 
-## Die Agenten – wer macht was?
+## The Agents – Who Does What?
 
-Die Logik ist als Kette von „Agenten“ (Knoten) umgesetzt. Jeder Agent hat eine klar umrissene Aufgabe:
+The logic is implemented as a chain of "agents" (nodes). Each agent has a clearly defined task:
 
-- Ingest‑Agent (`ingest_node`)
-   - Aufgabe: Eingabedaten laden. Wenn du eine Excel hochlädst, werden Mitarbeiter, Abwesenheiten und der Bedarf (Headcount je Zeitblock) daraus entnommen.
-   - Ergebnis: Eine saubere Liste von Mitarbeitern (inkl. Kosten pro Stunde und Rollen/Skills), Abwesenheiten und Bedarfszeilen.
+- Ingest Agent (`ingest_node`)
+   - Task: Load input data. When you upload an Excel file, employees, absences, and requirements (headcount per time block) are extracted from it.
+   - Result: A clean list of employees (including cost per hour and roles/skills), absences, and requirement rows.
 
-- Regel‑Agent (`rules_node`)
-   - Aufgabe: Einfache Regeln definieren, z. B. max. Stunden pro Tag, Ruhezeit zwischen Tagen, Skill‑Pflicht.
-   - Ergebnis: Ein „Constraints“-Paket, das alle weiteren Agenten kennen.
+- Rules Agent (`rules_node`)
+   - Task: Define simple rules, e.g., max. hours per day, rest time between days, skill requirements.
+   - Result: A "constraints" package that all subsequent agents know about.
 
-- Demand‑Agent (`demand_node`)
-   - Aufgabe: Den Bedarf zusammenstellen. Bei einem „Opening Hours“-Blatt werden die Rollen als Spalten gelesen (z. B. „Store Manager“, „Sales“) – die Zahlen sind Headcount.
-   - Ergebnis: Eine Liste von Zeilen wie: Tag, Zeitspanne, Rolle, Anzahl.
+- Demand Agent (`demand_node`)
+   - Task: Compile the requirements. For an "Opening Hours" sheet, roles are read as columns (e.g., "Store Manager", "Sales") – the numbers are headcount.
+   - Result: A list of rows like: day, time span, role, quantity.
 
-- Solver‑Agent (`solve_node`)
-   - Aufgabe: Mitarbeiter auf die Bedarfsspitzen verteilen – kostengünstig und regelkonform.
-   - Vorgehen (vereinfacht):
-      - Für „Store Manager“ werden zuerst echte Store Manager besetzt, danach Assistant/Deputy als Ersatz.
-      - Für „Sales“ werden Sales‑Profile genommen; optional darf „Cashier“ aushelfen.
-      - Kandidaten werden nach (Trefferqualität, Kosten) und einem kleinen Fairness‑Anteil sortiert. Eine leichte Rotation verhindert, dass immer dieselben zuerst genommen werden.
-      - Doppelbelegung derselben Person im identischen Zeitblock wird verhindert. Abwesenheiten und einfache Max‑Stunden‑/Ruhezeit‑Regeln werden berücksichtigt.
-   - Ergebnis: Eine Liste von „Assignments“ mit Tag, Zeit, Rolle, Mitarbeiter, Stunden und Kosten/h.
+- Solver Agent (`solve_node`)
+   - Task: Assign employees to demand peaks – cost-effectively and rule-compliant.
+   - Approach (simplified):
+      - For "Store Manager", real Store Managers are assigned first, then Assistant/Deputy as backup.
+      - For "Sales", Sales profiles are used; optionally "Cashier" can help out.
+      - Candidates are sorted by (match quality, cost) and a small fairness factor. Slight rotation prevents always taking the same ones first.
+      - Double-booking of the same person in the identical time block is prevented. Absences and simple max-hours/rest-time rules are considered.
+   - Result: A list of "assignments" with day, time, role, employee, hours, and cost/h.
 
-- Audit‑Agent (`audit_node`)
-   - Aufgabe: Prüft, ob der Bedarf je Block wirklich abgedeckt ist (z. B. Headcount erfüllt).
-   - Ergebnis: Liste von Abweichungen (z. B. Unterdeckung) für die spätere Bewertung.
+- Audit Agent (`audit_node`)
+   - Task: Checks whether the demand per block is actually covered (e.g., headcount fulfilled).
+   - Result: List of deviations (e.g., undercoverage) for later evaluation.
 
-- KPI‑Agent (`kpi_node`)
-   - Aufgabe: Einfache Kennzahlen berechnen – v. a. Gesamtkosten und Abdeckungsgrad.
-   - Ergebnis: KPIs anzeigen, damit man sieht, ob die Lösung „gut genug“ ist.
+- KPI Agent (`kpi_node`)
+   - Task: Calculate simple metrics – primarily total cost and coverage rate.
+   - Result: Display KPIs so you can see if the solution is "good enough".
 
-- Triage‑Agent (`triage_node`) und Human‑Gate (`human_gate_node`)
-   - Aufgabe: Wenn Regeln verletzt oder Budget überschritten ist, schlägt die Triage kleine Lockerungen vor (z. B. +0,5 Stunden max/Tag). Der Human‑Gate entscheidet: automatisch freigeben (Demo) oder auf Freigabe warten.
+- Triage Agent (`triage_node`) and Human Gate (`human_gate_node`)
+   - Task: If rules are violated or budget exceeded, triage suggests small relaxations (e.g., +0.5 hours max/day). The Human Gate decides: auto-approve (demo) or wait for approval.
 
-- Export‑Agent (`export_node`)
-   - Aufgabe: Abschluss der Planung (in der Demo nur ein „ok“ – hier könnte ein Export in Excel/CSV/ERP folgen).
+- Export Agent (`export_node`)
+   - Task: Completion of planning (in the demo just an "ok" – here an export to Excel/CSV/ERP could follow).
 
-Die UI zeigt parallel live, welcher Agent gerade aktiv ist und was er tut (SSE‑Telemetrie).
+The UI shows live which agent is currently active and what it's doing (SSE telemetry).
 
-## Wie ist das mit LangGraph umgesetzt?
+## How Is This Implemented with LangGraph?
 
-Stell dir die Agenten wie Stationen auf einer Kette vor. LangGraph erlaubt, diese Stationen klar zu definieren und zu verbinden:
+Think of the agents as stations on a chain. LangGraph allows you to clearly define and connect these stations:
 
-- Wir bauen einen Graphen mit festen Knoten (Ingest → Regeln → Bedarf → Solver → Audit → KPI …).
-- Zwischen den Knoten laufen einfache Datenpakete („State“). Jeder Knoten liest, was er braucht (z. B. Mitarbeiter, Bedarf) und hängt sein Ergebnis an.
-- Nach dem KPI‑Agenten entscheidet eine einfache „Weiche“: Wenn alles passt, geht’s direkt zum Export. Wenn nicht, geht’s über Triage und (optional) Human‑Gate zurück zum Lösen.
-- Jeder Knoten meldet Status‑Informationen (per Ereignissen) an die UI, damit man den Verlauf live mitlesen kann.
+- We build a graph with fixed nodes (Ingest → Rules → Demand → Solver → Audit → KPI …).
+- Simple data packages ("State") flow between nodes. Each node reads what it needs (e.g., employees, demand) and appends its result.
+- After the KPI agent, a simple "switch" decides: If everything fits, go directly to Export. If not, go via Triage and (optionally) Human Gate back to Solve.
+- Each node reports status information (via events) to the UI so you can follow the progress live.
 
-Das klingt technisch, ist aber im Kern simpel: eine Pipeline aus Arbeitsschritten, die jeweils ihr Teilergebnis anreichern und zusammen ein Ziel erreichen: einen praktikablen Schichtplan.
+This sounds technical, but at its core it's simple: a pipeline of work steps, each enriching its partial result, together achieving a goal: a practical shift plan.
 
-## Excel‑Upload – worauf achten?
+## Excel Upload – What to Watch Out For?
 
-- Mitarbeitende: Spalten wie Name, eine Rollen-/Positionsangabe (z. B. „Store Manager“, „Assistant Store Manager“, „Sales“) und „Cost per hour in EUR“ (wird automatisch erkannt). Fehlt die „Skills“-Spalte, interpretieren wir die Position als Skill.
-- Abwesenheiten: optional, aber hilfreich (Tag, von/bis, Typ).
-- Bedarf (z. B. Blatt „Opening Hours“): Spalten für Datum/Tag und „From/To“ für die Zeit. Rollen (Store Manager, Sales, …) als Spalten; die Zahlen sind der Headcount.
+- Employees: Columns like Name, a role/position specification (e.g., "Store Manager", "Assistant Store Manager", "Sales") and "Cost per hour in EUR" (automatically recognized). If the "Skills" column is missing, we interpret the position as a skill.
+- Absences: optional, but helpful (day, from/to, type).
+- Demand (e.g., "Opening Hours" sheet): Columns for date/day and "From/To" for time. Roles (Store Manager, Sales, …) as columns; the numbers are the headcount.
 
-## Kosten, Regeln und Kennzahlen
+## Costs, Rules, and Metrics
 
-- Kosten: Summe aus „Stunden im Block × Kosten pro Stunde“ über alle Zuteilungen (pro Mitarbeiter). Stundensätze werden robust aus der Excel gelesen (verschiedene Schreibweisen werden erkannt).
-- Regeln: Einfach gehalten, aber wirksam – Skill‑Match, keine Doppelbelegung im selben Zeitblock, Abwesenheiten, max. Stunden pro Tag/Woche (falls gesetzt), und Ruhezeiten zwischen Tagen.
-- KPIs: Gesamtkosten und Abdeckungsgrad (wie viel des Headcounts pro Block abgedeckt wurde).
+- Costs: Sum of "hours in block × cost per hour" across all assignments (per employee). Hourly rates are robustly read from Excel (various notations are recognized).
+- Rules: Kept simple but effective – skill match, no double-booking in the same time block, absences, max. hours per day/week (if set), and rest times between days.
+- KPIs: Total cost and coverage rate (how much of the headcount per block was covered).
 
-## Chat‑Funktion – Plan während der Laufzeit ändern
+## Chat Function – Modify Plan During Runtime
 
-Nach dem Erstellen eines Plans kannst du im Textfeld unten eine Nachricht eingeben, z. B.:
-- „Knut ist am 22.09.2025 krank"
-- „Stefan ist bis Freitag krank"
-- „Maria ist vom 01.10.2025 bis 05.10.2025 krank"
+After creating a plan, you can enter a message in the text field below, e.g.:
+- "Knut is sick on 22.09.2025"
+- "Stefan is sick until Friday"
+- "Maria is sick from 01.10.2025 to 05.10.2025"
 
-Das System verarbeitet deine Nachricht automatisch:
-1. Erkennt den Mitarbeiter (z. B. „Knut" → Personalnummer 10118)
-2. Erkennt das Datum oder den Zeitraum
-3. Fügt die Abwesenheit hinzu
-4. Erstellt den Plan neu unter Berücksichtigung der Änderung
+The system automatically processes your message:
+1. Recognizes the employee (e.g., "Knut" → employee number 10118)
+2. Recognizes the date or time period
+3. Adds the absence
+4. Recreates the plan considering the change
 
-### Wie funktioniert das?
+### How Does This Work?
 
-Die Chat‑Funktion nutzt zwei Ansätze:
+The chat function uses two approaches:
 
-**LLM‑basiert (wenn aktiviert):**
-- Ein KI‑Modell analysiert deine Nachricht in beliebiger Sprache
-- Extrahiert automatisch Mitarbeiter-ID, Datum und Art der Abwesenheit
-- Funktioniert auch mit flexibleren Formulierungen wie „Knut ist ab morgen 3 Tage krank"
+**LLM-based (when activated):**
+- An AI model analyzes your message in any language
+- Automatically extracts employee ID, date, and type of absence
+- Also works with more flexible formulations like "Knut is sick starting tomorrow for 3 days"
 
-**Regelbasiert (Fallback):**
-- Falls das LLM nicht verfügbar ist, greift ein einfacher regelbasierter Parser
-- Erkennt deutsche Sätze wie „Name ist am/bis/vom Datum krank"
-- Weniger flexibel, aber zuverlässig für Standardfälle
+**Rule-based (Fallback):**
+- If the LLM is not available, a simple rule-based parser kicks in
+- Recognizes German sentences like "Name is sick on/until/from date"
+- Less flexible, but reliable for standard cases
 
-Du kannst zwischen beiden Modi wählen über die Umgebungsvariable `SHIFTPLAN_USE_LLM_INTENTS` in der `.env` Datei:
-- `SHIFTPLAN_USE_LLM_INTENTS=1` → LLM-Modus (flexibler, sprachunabhängig)
-- `SHIFTPLAN_USE_LLM_INTENTS=0` → Nur regelbasiert (einfacher, offline-fähig)
+You can choose between both modes via the environment variable `SHIFTPLAN_USE_LLM_INTENTS` in the `.env` file:
+- `SHIFTPLAN_USE_LLM_INTENTS=1` → LLM mode (more flexible, language-independent)
+- `SHIFTPLAN_USE_LLM_INTENTS=0` → Only rule-based (simpler, offline-capable)
 
-### Intelligente Ersatzplanung
+### Intelligent Replacement Planning
 
-Wenn ein Store Manager ausfällt (z. B. Knut), versucht das System automatisch:
-1. Einen **anderen Store Manager** zu finden
-2. Falls nicht verfügbar: einen **Assistant Store Manager** als Ersatz einzusetzen
-3. Falls auch das nicht möglich ist: meldet der Audit‑Agent die Unterbesetzung als Warnung
+When a Store Manager is unavailable (e.g., Knut), the system automatically tries to:
+1. Find **another Store Manager**
+2. If not available: deploy an **Assistant Store Manager** as replacement
+3. If that's also not possible: the Audit agent reports understaffing as a warning
 
-Das System berücksichtigt dabei:
-- Wer ist verfügbar (keine Doppelbelegung, keine Abwesenheiten)
-- Wer ist qualifiziert (Skills müssen passen)
-- Wer ist kostengünstig (bevorzugt günstigere Mitarbeiter)
-- Wer ist fair verteilt (verhindert Überlastung einzelner Mitarbeiter)
+The system considers:
+- Who is available (no double-booking, no absences)
+- Who is qualified (skills must match)
+- Who is cost-effective (prefers cheaper employees)
+- Who is fairly distributed (prevents overloading individual employees)
 
-## LLM‑Integration (optional)
+## LLM Integration (Optional)
 
-Ein Client für Scaleway‑LLM (oder OpenAI-kompatible APIs) ist integriert. Das LLM wird für zwei Zwecke genutzt:
+A client for Scaleway LLM (or OpenAI-compatible APIs) is integrated. The LLM is used for two purposes:
 
-1. **Chat‑Intent‑Erkennung**: Versteht deine Nachrichten in natürlicher Sprache und extrahiert strukturierte Informationen
-2. **Schritt‑Zusammenfassungen**: Kommentiert die einzelnen Agenten‑Schritte in der UI (optional)
+1. **Chat Intent Recognition**: Understands your messages in natural language and extracts structured information
+2. **Step Summaries**: Comments on individual agent steps in the UI (optional)
 
-Wenn keine Zugangsdaten gesetzt sind, läuft die Demo offline weiter mit regelbasierten Fallbacks. Das LLM ist nicht kritisch für die Kernfunktionalität.
+If no credentials are set, the demo continues offline with rule-based fallbacks. The LLM is not critical for core functionality.
 
-## Endpunkte & UI
+## Endpoints & UI
 
-- UI: `GET /ui/` → Upload, Start, Live‑Verlauf, Ergebnis‑Tabelle, Chat‑Eingabe.
+- UI: `GET /ui/` → Upload, Start, Live Progress, Result Table, Chat Input.
 - API:
-   - `POST /upload` → Excel hochladen.
-   - `POST /run` → Graph ausführen (JSON‑Body: `{ "auto_approve": true }`).
-   - `POST /chat` → Nachricht senden, um Plan zu ändern (JSON‑Body: `{ "message": "Knut ist am 22.09.2025 krank", "run_id": "default", "auto_approve": true }`).
-   - `POST /result` → Liefert die Ergebnis‑HTML mit Tabelle.
-   - `GET /inspect` → Zeigt die geladenen Daten (Counts/Samples).
-   - `GET /llm_status` → Zeigt ob LLM aktiviert ist und welches Modell verwendet wird.
+   - `POST /upload` → Upload Excel.
+   - `POST /run` → Execute graph (JSON body: `{ "auto_approve": true }`).
+   - `POST /chat` → Send message to modify plan (JSON body: `{ "message": "Knut is sick on 22.09.2025", "run_id": "default", "auto_approve": true }`).
+   - `POST /result` → Delivers result HTML with table.
+   - `GET /inspect` → Shows loaded data (counts/samples).
+   - `GET /llm_status` → Shows whether LLM is activated and which model is used.
 
-## Grenzen der Demo und Ausblick
+## Demo Limitations and Outlook
 
-- Der Solver ist bewusst einfach (greedy), liefert aber schon brauchbare Ergebnisse. Für komplexe Pläne kann ein Optimierer (z. B. OR‑Tools) eingebaut werden.
-- Die Regeln sind minimal und können erweitert werden (Pausen, Tarifregeln, Schichtfolgen, Wünsche …).
-- Export ist aktuell ein Platzhalter – hier ließen sich Dateien oder System‑Schnittstellen anbinden.
+- The solver is intentionally simple (greedy) but already delivers usable results. For complex plans, an optimizer (e.g., OR-Tools) can be integrated.
+- The rules are minimal and can be extended (breaks, tariff rules, shift sequences, preferences …).
+- Export is currently a placeholder – here files or system interfaces could be connected.
 
-Die Stärke der Lösung liegt in der klaren Struktur: Jeder Schritt ist eigenständig und nachvollziehbar. Dadurch kann man die Logik Schritt für Schritt verfeinern, ohne das Gesamtsystem zu verkomplizieren.
+The strength of the solution lies in its clear structure: Each step is independent and comprehensible. This allows you to refine the logic step by step without complicating the overall system.
