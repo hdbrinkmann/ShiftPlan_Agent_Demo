@@ -83,18 +83,69 @@ Das klingt technisch, ist aber im Kern simpel: eine Pipeline aus Arbeitsschritte
 - Regeln: Einfach gehalten, aber wirksam – Skill‑Match, keine Doppelbelegung im selben Zeitblock, Abwesenheiten, max. Stunden pro Tag/Woche (falls gesetzt), und Ruhezeiten zwischen Tagen.
 - KPIs: Gesamtkosten und Abdeckungsgrad (wie viel des Headcounts pro Block abgedeckt wurde).
 
+## Chat‑Funktion – Plan während der Laufzeit ändern
+
+Nach dem Erstellen eines Plans kannst du im Textfeld unten eine Nachricht eingeben, z. B.:
+- „Knut ist am 22.09.2025 krank"
+- „Stefan ist bis Freitag krank"
+- „Maria ist vom 01.10.2025 bis 05.10.2025 krank"
+
+Das System verarbeitet deine Nachricht automatisch:
+1. Erkennt den Mitarbeiter (z. B. „Knut" → Personalnummer 10118)
+2. Erkennt das Datum oder den Zeitraum
+3. Fügt die Abwesenheit hinzu
+4. Erstellt den Plan neu unter Berücksichtigung der Änderung
+
+### Wie funktioniert das?
+
+Die Chat‑Funktion nutzt zwei Ansätze:
+
+**LLM‑basiert (wenn aktiviert):**
+- Ein KI‑Modell analysiert deine Nachricht in beliebiger Sprache
+- Extrahiert automatisch Mitarbeiter-ID, Datum und Art der Abwesenheit
+- Funktioniert auch mit flexibleren Formulierungen wie „Knut ist ab morgen 3 Tage krank"
+
+**Regelbasiert (Fallback):**
+- Falls das LLM nicht verfügbar ist, greift ein einfacher regelbasierter Parser
+- Erkennt deutsche Sätze wie „Name ist am/bis/vom Datum krank"
+- Weniger flexibel, aber zuverlässig für Standardfälle
+
+Du kannst zwischen beiden Modi wählen über die Umgebungsvariable `SHIFTPLAN_USE_LLM_INTENTS` in der `.env` Datei:
+- `SHIFTPLAN_USE_LLM_INTENTS=1` → LLM-Modus (flexibler, sprachunabhängig)
+- `SHIFTPLAN_USE_LLM_INTENTS=0` → Nur regelbasiert (einfacher, offline-fähig)
+
+### Intelligente Ersatzplanung
+
+Wenn ein Store Manager ausfällt (z. B. Knut), versucht das System automatisch:
+1. Einen **anderen Store Manager** zu finden
+2. Falls nicht verfügbar: einen **Assistant Store Manager** als Ersatz einzusetzen
+3. Falls auch das nicht möglich ist: meldet der Audit‑Agent die Unterbesetzung als Warnung
+
+Das System berücksichtigt dabei:
+- Wer ist verfügbar (keine Doppelbelegung, keine Abwesenheiten)
+- Wer ist qualifiziert (Skills müssen passen)
+- Wer ist kostengünstig (bevorzugt günstigere Mitarbeiter)
+- Wer ist fair verteilt (verhindert Überlastung einzelner Mitarbeiter)
+
 ## LLM‑Integration (optional)
 
-Ein einfacher Client für Scaleway‑LLM ist dabei. Wenn keine Zugangsdaten gesetzt sind, läuft die Demo offline weiter (es gibt dann nur einfache Textzusammenfassungen/Fallbacks). Das LLM ist nicht kritisch für den Plan – es kommentiert eher Schritte oder könnte später für Erklärungen genutzt werden.
+Ein Client für Scaleway‑LLM (oder OpenAI-kompatible APIs) ist integriert. Das LLM wird für zwei Zwecke genutzt:
+
+1. **Chat‑Intent‑Erkennung**: Versteht deine Nachrichten in natürlicher Sprache und extrahiert strukturierte Informationen
+2. **Schritt‑Zusammenfassungen**: Kommentiert die einzelnen Agenten‑Schritte in der UI (optional)
+
+Wenn keine Zugangsdaten gesetzt sind, läuft die Demo offline weiter mit regelbasierten Fallbacks. Das LLM ist nicht kritisch für die Kernfunktionalität.
 
 ## Endpunkte & UI
 
-- UI: `GET /ui/` → Upload, Start, Live‑Verlauf, Ergebnis‑Tabelle.
+- UI: `GET /ui/` → Upload, Start, Live‑Verlauf, Ergebnis‑Tabelle, Chat‑Eingabe.
 - API:
    - `POST /upload` → Excel hochladen.
    - `POST /run` → Graph ausführen (JSON‑Body: `{ "auto_approve": true }`).
+   - `POST /chat` → Nachricht senden, um Plan zu ändern (JSON‑Body: `{ "message": "Knut ist am 22.09.2025 krank", "run_id": "default", "auto_approve": true }`).
    - `POST /result` → Liefert die Ergebnis‑HTML mit Tabelle.
    - `GET /inspect` → Zeigt die geladenen Daten (Counts/Samples).
+   - `GET /llm_status` → Zeigt ob LLM aktiviert ist und welches Modell verwendet wird.
 
 ## Grenzen der Demo und Ausblick
 

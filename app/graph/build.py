@@ -25,7 +25,7 @@ def build_graph():
             run_id = (state.get("kpis", {}) or {}).get("run_id") or state.get("run_id") or "default"
             publish_event(run_id, {"active_node": name, "message": f"Entering {name}"})
             # record step
-            steps = list(state.get("steps", []))
+            steps = list(state.get("steps") or [])
             steps.append(name)
             state = {**state, "steps": steps}
             new_state = fn(state, **kwargs)

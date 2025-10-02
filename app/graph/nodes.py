@@ -9,14 +9,37 @@ def log(state: PlanState, message: str) -> None:
     state.setdefault("logs", []).append(message)
 
 def ingest_node(state: PlanState) -> PlanState:
+    # Load data from store
     employees, absences = ingest_svc.parse_sources()
+    
+    # IMPORTANT: If state already has absences (e.g., from chat modifications),
+    # merge them instead of overwriting
+    existing_absences = state.get("absences") or []
+    
+    print(f"[INGEST_NODE] Store absences: {len(absences)}")
+    print(f"[INGEST_NODE] State absences: {len(existing_absences)}")
+    
+    if existing_absences:
+        # Use existing absences from state (includes chat modifications)
+        final_absences = existing_absences
+        log_msg = f"Ingested employees. Using existing absences from state. emp={len(employees)}, abs={len(final_absences)}"
+        print(f"[INGEST_NODE] Using state absences (from chat)")
+        # Show last 3 for debug
+        for a in final_absences[-3:]:
+            print(f"[INGEST_NODE] Absence: emp={a.get('employee_id')}, day={a.get('day')}, time={a.get('time')}")
+    else:
+        # No existing absences in state, use what we loaded
+        final_absences = absences
+        log_msg = f"Ingested employees and absences from store. emp={len(employees)}, abs={len(final_absences)}"
+        print(f"[INGEST_NODE] Using store absences")
+    
     new_state: PlanState = {
         **state,
         "status": "INGESTED",
         "employees": employees,
-        "absences": absences,
+        "absences": final_absences,
     }
-    log(new_state, f"Ingested employees and absences. emp={len(employees)}, abs={len(absences)}")
+    log(new_state, log_msg)
     return new_state
 
 def rules_node(state: PlanState) -> PlanState:
@@ -168,4 +191,3 @@ def export_node(state: PlanState) -> PlanState:
     new_state: PlanState = {**state, "exported": True, "status": "FINALIZED"}
     log(new_state, "Exported plan (stub).")
     return new_state
-

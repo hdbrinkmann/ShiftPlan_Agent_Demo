@@ -8,6 +8,8 @@ import time
 import pandas as pd
 from fastapi.responses import HTMLResponse
 from app.data.store import get_data
+from app.services.chat_intents import parse_message_to_intents, apply_intents
+from app.services.llm import ScalewayLLM
 
 app = FastAPI(title="Shift Planning Sample (LangGraph)")
 app.include_router(ui_router, prefix="/ui", tags=["ui"])
@@ -20,6 +22,12 @@ class RunRequest(BaseModel):
     auto_approve: bool = True
     budget: float | None = None
     run_id: str | None = None
+
+class ChatRequest(BaseModel):
+    message: str
+    run_id: str | None = None
+    auto_approve: bool = True
+    budget: float | None = None
 
 @app.post("/run")
 def run(req: RunRequest):
@@ -38,6 +46,17 @@ def run(req: RunRequest):
     final_state = graph.invoke(initial_state, config={"auto_approve": req.auto_approve})
     publish_event(run_id, {"message": "Run finished", "active_node": None})
     return {"run_id": run_id, **final_state}
+
+@app.get("/llm_status")
+def llm_status():
+    llm = ScalewayLLM()
+    status = {
+        "enabled": bool(getattr(llm, "enabled", False)),
+        "base_url": getattr(llm, "base_url", None),
+        "model": getattr(llm, "model", None),
+    }
+    # Hinweis: Keine Secrets zurückgeben!
+    return status
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
@@ -295,3 +314,93 @@ def inspect():
             "demand": demand[0] if demand else None,
         }
     }
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    try:
+        # 1) Vorhandenen State laden
+        employees, absences, demand = get_data()
+        
+        # Check if data is available
+        if not employees and not demand:
+            raise HTTPException(
+                status_code=400, 
+                detail="Keine Daten geladen. Bitte zuerst eine Excel-Datei hochladen."
+            )
+        
+        print(f"Chat request: '{req.message}' with {len(employees)} employees")
+        
+        state = {
+            "employees": employees,
+            "absences": absences,
+            "demand": demand,
+        }
+        
+        # 2) Nachricht in Intents parsen
+        intents, notes = parse_message_to_intents(req.message, employees=employees)
+        print(f"Parsed intents: {intents}")
+        print(f"Notes: {notes}")
+        
+        # Wenn keine Intents erkannt wurden
+        if not intents:
+            return {
+                "ok": False,
+                "error": "Konnte keine Aktion aus der Nachricht erkennen.",
+                "notes": notes,
+                "intents": [],
+                "apply_logs": [],
+            }
+        
+        # 3) Intents anwenden
+        state2, logs = apply_intents(intents, state)
+        print(f"Apply logs: {logs}")
+        print(f"[CHAT] Absences after apply_intents: {len(state2.get('absences', []))} total")
+        # Show last 3 absences for debug
+        for a in state2.get('absences', [])[-3:]:
+            print(f"[CHAT] Absence: emp={a.get('employee_id')}, day={a.get('day')}, time={a.get('time')}")
+        
+        # 4) Store aktualisieren
+        set_data(employees=state2.get("employees"), absences=state2.get("absences"), demand=state2.get("demand"))
+        
+        # Verify store was updated
+        _, stored_abs, _ = get_data()
+        print(f"[CHAT] Store now has {len(stored_abs)} absences after set_data")
+        
+        # 5) Graph erneut laufen lassen
+        graph = build_graph()
+        run_id = req.run_id or str(int(time.time()*1000))
+        # IMPORTANT: Include updated absences in initial state so ingest_node uses them
+        initial_state = {
+            "status": "INIT",
+            "needs_approval": False,
+            "awaiting_approval": False,
+            "kpis": {"budget": req.budget} if req.budget is not None else {},
+            "logs": [],
+            "steps": [],
+            "run_id": run_id,
+            "absences": state2.get("absences", []),  # Include updated absences!
+        }
+        
+        publish_event(run_id, {"message": "Chat-Änderung wird angewendet", "active_node": "ingest"})
+        final_state = graph.invoke(initial_state, config={"auto_approve": req.auto_approve})
+        publish_event(run_id, {"message": "Chat-Änderung abgeschlossen", "active_node": None})
+        
+        return {
+            "ok": True,
+            "run_id": run_id,
+            "intents": intents,
+            "notes": notes,
+            "apply_logs": logs,
+            "kpis": final_state.get("kpis", {}),
+            "solution": final_state.get("solution", {}),
+            "steps": final_state.get("steps", []),
+            "audit": final_state.get("audit", {}),
+            "status": final_state.get("status", ""),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Chat endpoint error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Chat-Fehler: {str(e)}")

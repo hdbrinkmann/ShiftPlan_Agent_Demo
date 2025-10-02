@@ -62,6 +62,13 @@ HTML = """
       <div id="resultStepsWrap"></div>
       <div id="auditWrap"></div>
     </div>
+    <div id="chat" style="margin-top:16px; padding-top:8px; border-top:1px solid #eee;">
+      <h3>Chat</h3>
+      <div class="muted">Beispiel: "Stefan ist bis Freitag krank"</div>
+      <input id="chatMsg" placeholder="Nachricht eingeben" style="width:60%;" />
+      <button id="chatSend">Senden</button>
+      <div id="chatNotes" class="muted" style="margin-top:6px;"></div>
+    </div>
     <script>
   const btn = document.getElementById('connect');
   const startBtn = document.getElementById('startRun');
@@ -79,6 +86,9 @@ HTML = """
       const resultTableWrap = document.getElementById('resultTableWrap');
   const resultStepsWrap = document.getElementById('resultStepsWrap');
   const auditWrap = document.getElementById('auditWrap');
+  const chatInput = document.getElementById('chatMsg');
+  const chatSend = document.getElementById('chatSend');
+  const chatNotes = document.getElementById('chatNotes');
     const agentPanel = document.getElementById('agentPanel');
     const nodeInsights = {};
       let es;
@@ -149,6 +159,59 @@ HTML = """
         }
         uploadBtn.disabled = false;
       }
+
+      chatSend.onclick = async () => {
+        const runId = runInput.value || 'default';
+        const msg = (chatInput.value || '').trim();
+        if (!msg){
+          chatNotes.textContent = 'Bitte eine Nachricht eingeben.';
+          chatNotes.style.color = '#c00';
+          return;
+        }
+        chatNotes.textContent = 'Sende...';
+        chatNotes.style.color = '#555';
+        try {
+          const res = await fetch('/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ run_id: runId, message: msg, auto_approve: !!autoApproveEl.checked })
+          });
+          const json = await res.json();
+          if (!res.ok || json.ok === false){
+            const errorMsg = json.error || json.detail || 'Chat failed';
+            chatNotes.textContent = 'Fehler: ' + errorMsg;
+            chatNotes.style.color = '#c00';
+            // Show notes even on error
+            if (json.notes && json.notes.length > 0) {
+              chatNotes.textContent += ' | Info: ' + json.notes.join(' | ');
+            }
+            if (json.apply_logs && json.apply_logs.length > 0) {
+              chatNotes.textContent += ' | Logs: ' + json.apply_logs.join(' | ');
+            }
+            add('Chat Fehler: ' + errorMsg);
+            return;
+          }
+          add('Chat angewendet: ' + msg);
+          const allNotes = (json.notes || []).concat(json.apply_logs || []);
+          if (allNotes.length > 0) {
+            chatNotes.textContent = allNotes.join(' | ');
+            chatNotes.style.color = '#0a0';
+          } else {
+            chatNotes.textContent = 'Erfolgreich angewendet';
+            chatNotes.style.color = '#0a0';
+          }
+          // Show parsed intents for debugging
+          if (json.intents && json.intents.length > 0) {
+            add('Erkannte Intents: ' + JSON.stringify(json.intents));
+          }
+          renderResult(json);
+          chatInput.value = ''; // Clear input on success
+        } catch(err){
+          chatNotes.textContent = 'Fehler: ' + err.message;
+          chatNotes.style.color = '#c00';
+          add('Chat Fehler: ' + err.message);
+        }
+      };
       function add(msg){
         const div = document.createElement('div');
         div.className = 'log';

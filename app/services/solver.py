@@ -14,7 +14,7 @@ def solve(employees: List[Dict[str, Any]], absences: List[Dict[str, Any]], const
 
     # Normalisierung und Synonyme
     def norm(s: str) -> str:
-        return " ".join(str(s or "").strip().lower().replace("_", " ").replace("-", " ").split())
+        return " ".join(str(s or "").strip().lower().replace("_", " ").replace("-", " ").replace(".", "").split())
 
     # Zielrollen-Erkennung (aus Demand)
     def role_kind(role: str) -> str:
@@ -69,23 +69,74 @@ def solve(employees: List[Dict[str, Any]], absences: List[Dict[str, Any]], const
         else:
             ROLE_MATCHERS[rk] = (ideal, fallback)
 
-    # Abwesenheiten in schnelle Nachschlageform bringen: blocked[emp][day] -> List[(start,end)]
+    # Hilfsfunktion: Tagesstring robust in ISO (YYYY-MM-DD) überführen
+    def _day_to_iso(s: str) -> str:
+        s = str(s or "").strip()
+        # Handle timestamps (e.g., "2025-09-22 00:00:00") by extracting date part
+        if " " in s:
+            s = s.split(" ")[0]
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d",
+                    "%d.%m.%Y", "%d-%m-%Y", "%d/%m/%Y",
+                    "%m/%d/%Y"):
+            try:
+                return datetime.strptime(s, fmt).date().isoformat()
+            except Exception:
+                pass
+        return s  # Unverändert, wenn kein Datumsformat erkennbar (z. B. Wochentagsname)
+
+    # Abwesenheiten in schnelle Nachschlageform bringen: blocked[emp][iso_day] -> List[(start,end)]
     blocked: DefaultDict[str, DefaultDict[str, List[Tuple[int, int]]]] = defaultdict(lambda: defaultdict(list))
     for a in absences or []:
         emp = str(a.get("employee_id", ""))
-        day = str(a.get("day", ""))
+        day = _day_to_iso(a.get("day", ""))
         span = str(a.get("time", ""))
         st, en = _span_minutes(span)
         if emp and day and st is not None and en is not None:
             blocked[emp][day].append((st, en))
+            print(f"[SOLVER] Blocked: emp={emp}, day={day}, time={st}-{en} minutes")
 
     def is_available(emp_id: str, day: str, span: str) -> bool:
         st, en = _span_minutes(span)
         if st is None or en is None:
             return True
-        for bst, ben in blocked.get(emp_id, {}).get(day, []):
+        iso_day = _day_to_iso(day)
+        
+        # DEBUG for emp 10118
+        if emp_id == "10118":
+            print(f"[SOLVER is_available] emp=10118, input day='{day}', iso_day='{iso_day}', span='{span}' -> {st}-{en} min")
+            print(f"[SOLVER is_available] blocked days for 10118: {list(blocked.get('10118', {}).keys())}")
+            if iso_day in blocked.get("10118", {}):
+                print(f"[SOLVER is_available] blocked intervals on {iso_day}: {blocked.get('10118', {}).get(iso_day, [])}")
+        
+        # 1) Exakte Tagesübereinstimmung (ISO)
+        for bst, ben in blocked.get(emp_id, {}).get(iso_day, []):
             if _overlaps((st, en), (bst, ben)):
+                print(f"[SOLVER] Employee {emp_id} NOT available on {iso_day} {span} (blocked {bst}-{ben})")
                 return False
+        # 2) Wochentagsabgleich: Wenn Demand einen Wochentag (z. B. "Mon"/"Mo"/"Montag") nutzt,
+        #    blocke, falls irgendeine Abwesenheit an einem Datum mit gleichem Wochentag liegt.
+        wk_map = {
+            "mon": 0, "mo": 0, "montag": 0,
+            "tue": 1, "di": 1, "dienstag": 1,
+            "wed": 2, "mi": 2, "mittwoch": 2,
+            "thu": 3, "do": 3, "donnerstag": 3,
+            "fri": 4, "fr": 4, "freitag": 4,
+            "sat": 5, "sa": 5, "samstag": 5,
+            "sun": 6, "so": 6, "sonntag": 6,
+        }
+        day_token = str(day or "").strip().lower()
+        wanted_wd = wk_map.get(day_token[:3]) if day_token else None
+        if wanted_wd is not None:
+            for bd, intervals in blocked.get(emp_id, {}).items():
+                # nur echte ISO-Daten berücksichtigen
+                try:
+                    bd_wd = datetime.strptime(bd, "%Y-%m-%d").weekday()
+                except Exception:
+                    continue
+                if bd_wd == wanted_wd:
+                    for bst, ben in intervals:
+                        if _overlaps((st, en), (bst, ben)):
+                            return False
         return True
 
     # Skills pro Mitarbeiter normalisieren
@@ -168,7 +219,13 @@ def solve(employees: List[Dict[str, Any]], absences: List[Dict[str, Any]], const
                 m_rank = 0
             if m_rank is None:
                 continue
-            if not is_available(eid, day, time_span):
+            # DEBUG: Check availability for emp 10118
+            if eid == "10118":
+                print(f"[SOLVER] Checking availability for 10118: day={day}, time={time_span}")
+            avail = is_available(eid, day, time_span)
+            if eid == "10118":
+                print(f"[SOLVER] Employee 10118 available={avail}")
+            if not avail:
                 continue
             candidates.append((m_rank, e))
 
@@ -242,8 +299,13 @@ def _span_minutes(span: str) -> Tuple[int | None, int | None]:
         if not span or "-" not in span:
             return None, None
         start, end = span.split("-", 1)
-        sh, sm = [int(x) for x in start.strip().split(":")]
-        eh, em = [int(x) for x in end.strip().split(":")]
+        # Handle both HH:MM and HH:MM:SS formats
+        start_parts = start.strip().split(":")
+        end_parts = end.strip().split(":")
+        sh = int(start_parts[0])
+        sm = int(start_parts[1]) if len(start_parts) > 1 else 0
+        eh = int(end_parts[0])
+        em = int(end_parts[1]) if len(end_parts) > 1 else 0
         return sh * 60 + sm, eh * 60 + em
     except Exception:
         return None, None
