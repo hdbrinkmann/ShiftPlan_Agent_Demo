@@ -10,6 +10,13 @@ from fastapi.responses import HTMLResponse
 from app.data.store import get_data
 from app.services.chat_intents import parse_message_to_intents, apply_intents
 from app.services.llm import ScalewayLLM
+from app.services.forecast import (
+    run_forecast as run_forecast_service,
+    run_forecast_to_status,
+    resolve_status_path,
+)
+import threading
+import json
 
 app = FastAPI(title="Shift Planning Sample (LangGraph)")
 app.include_router(ui_router, prefix="/ui", tags=["ui"])
@@ -314,6 +321,27 @@ def inspect():
             "demand": demand[0] if demand else None,
         }
     }
+
+@app.post("/forecast/run")
+def forecast_run():
+    try:
+        # Launch forecast in background and return immediately
+        t = threading.Thread(target=run_forecast_to_status, daemon=True)
+        t.start()
+        return {"ok": True, "started": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Forecast failed to start: {e}")
+
+@app.get("/forecast/status")
+def forecast_status():
+    try:
+        p = resolve_status_path()
+        if not p.exists():
+            return {"ok": True, "status": "idle"}
+        data = json.loads(p.read_text() or "{}")
+        return {"ok": True, **data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Status read failed: {e}")
 
 @app.post("/chat")
 def chat(req: ChatRequest):

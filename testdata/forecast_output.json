@@ -1,0 +1,62 @@
+[
+  {
+    "Date": "2025-09-22",
+    "Pred_StoreManager": 1,
+    "Pred_Sales": 3
+  },
+  {
+    "Date": "2025-09-23",
+    "Pred_StoreManager": 1,
+    "Pred_Sales": 3
+  },
+  {
+    "Date": "2025-09-24",
+    "Pred_StoreManager": 1,
+    "Pred_Sales": 3
+  },
+  {
+    "Date": "2025-09-25",
+    "Pred_StoreManager": 1,
+    "Pred_Sales": 3
+  },
+  {
+    "Date": "2025-09-26",
+    "Pred_StoreManager": 1,
+    "Pred_Sales": 3
+  },
+  {
+    "Date": "2025-09-27",
+    "Pred_StoreManager": 1,
+    "Pred_Sales": 3
+  },
+  {
+    "Date": "2025-09-29",
+    "Pred_StoreManager": 1,
+    "Pred_Sales": 2
+  },
+  {
+    "Date": "2025-09-30",
+    "Pred_StoreManager": 1,
+    "Pred_Sales": 2
+  },
+  {
+    "Date": "2025-10-01",
+    "Pred_StoreManager": 1,
+    "Pred_Sales": 3
+  },
+  {
+    "Date": "2025-10-02",
+    "Pred_StoreManager": 1,
+    "Pred_Sales": 2
+  },
+  {
+    "Date": "2025-10-03",
+    "Pred_StoreManager": 1,
+    "Pred_Sales": 3
+  },
+  {
+    "Date": "2025-10-04",
+    "Pred_StoreManager": 1,
+    "Pred_Sales": 3
+  }
+]

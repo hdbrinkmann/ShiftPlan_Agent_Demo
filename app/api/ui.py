@@ -41,7 +41,7 @@ HTML = """
     <div style="margin:8px 0;">
       <form id="uploadForm">
         <input type="file" id="file" accept=".xlsx,.xls" />
-        <button id="uploadBtn" type="submit">Upload Excel</button>
+        <button id="uploadBtn" type="button">Upload Excel</button>
         <span id="uploadStatus" style="margin-left:8px;color:#555"></span>
       </form>
     </div>
@@ -54,6 +54,13 @@ HTML = """
     </div>
     <h3>Events</h3>
     <div id="events"></div>
+
+    <div id="forecast" style="margin-top:16px; padding-top:8px; border-top:1px solid #eee;">
+      <h3>Forecast</h3>
+      <button id="runForecast">Run Forecast</button>
+      <span id="forecastStatus" class="muted" style="margin-left:8px;"></span>
+      <div id="forecastPreview" style="margin-top:8px;"></div>
+    </div>
 
     <div id="result">
       <h3>Result</h3>
@@ -72,6 +79,7 @@ HTML = """
     <script>
   const btn = document.getElementById('connect');
   const startBtn = document.getElementById('startRun');
+  const runFcBtn = document.getElementById('runForecast');
   const budgetEl = document.getElementById('budget');
   const autoApproveEl = document.getElementById('autoApprove');
   const uploadForm = document.getElementById('uploadForm');
@@ -91,6 +99,8 @@ HTML = """
   const chatNotes = document.getElementById('chatNotes');
     const agentPanel = document.getElementById('agentPanel');
     const nodeInsights = {};
+  const fcStatus = document.getElementById('forecastStatus');
+  const fcPreview = document.getElementById('forecastPreview');
       let es;
       btn.onclick = () => {
         if (es) es.close();
@@ -128,7 +138,96 @@ HTML = """
         add('Run finished.');
         renderResult(json);
       }
-      uploadForm.onsubmit = async (e) => {
+      // Forecast button handler (async with status polling)
+      runFcBtn.onclick = async () => {
+        fcStatus.textContent = 'Starting forecast...';
+        fcStatus.style.color = '#555';
+        fcPreview.innerHTML = '';
+        runFcBtn.disabled = true;
+
+        let pollTimer = null;
+        const stopPolling = () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } };
+
+        const renderPreview = (preview) => {
+          const rows = (Array.isArray(preview) ? preview : []).map(r =>
+            `<tr><td>${r.Date ?? ''}</td><td>${r['Store Manager'] ?? ''}</td><td>${r.Sales ?? ''}</td></tr>`
+          ).join('');
+          fcPreview.innerHTML = rows
+            ? `<table><thead><tr><th>Date</th><th>Store Manager</th><th>Sales</th></tr></thead><tbody>${rows}</tbody></table>`
+            : '<div class="muted">No preview</div>';
+        };
+
+        try {
+          const res = await fetch('/forecast/run', { method: 'POST' });
+          const json = await res.json();
+          if (!res.ok || json.ok === false) {
+            const msg = json.detail || 'Forecast failed to start';
+            fcStatus.textContent = 'Error: ' + msg;
+            fcStatus.style.color = '#c00';
+            add('Forecast error: ' + msg);
+            runFcBtn.disabled = false;
+            return;
+          }
+          // Poll for status until done or error
+          const poll = async () => {
+            try {
+              const sres = await fetch('/forecast/status');
+              const sjson = await sres.json();
+              if (!sres.ok || sjson.ok === false) {
+                const msg = sjson.detail || 'Status fetch failed';
+                fcStatus.textContent = 'Error: ' + msg;
+                fcStatus.style.color = '#c00';
+                add('Forecast status error: ' + msg);
+                stopPolling();
+                runFcBtn.disabled = false;
+                return;
+              }
+              const status = sjson.status || 'idle';
+              if (status === 'running') {
+                fcStatus.textContent = 'Forecast running...';
+                fcStatus.style.color = '#555';
+              } else if (status === 'done') {
+                const payload = sjson.payload || {};
+                const m = payload.metrics || {};
+                fcStatus.textContent = `Done. Metrics (train MAE) — SM: ${m.SM ?? '-'}, Sales: ${m.Sales ?? '-'}`;
+                fcStatus.style.color = '#0a0';
+                add('Forecast finished.');
+                renderPreview(payload.preview || []);
+                stopPolling();
+                runFcBtn.disabled = false;
+              } else if (status === 'error') {
+                const emsg = sjson.error || 'unknown error';
+                fcStatus.textContent = 'Error: ' + emsg;
+                fcStatus.style.color = '#c00';
+                add('Forecast error: ' + emsg);
+                stopPolling();
+                runFcBtn.disabled = false;
+              } else {
+                fcStatus.textContent = 'Idle.';
+                fcStatus.style.color = '#777';
+                stopPolling();
+                runFcBtn.disabled = false;
+              }
+            } catch (e) {
+              fcStatus.textContent = 'Error: ' + e.message;
+              fcStatus.style.color = '#c00';
+              add('Forecast status error: ' + e.message);
+              stopPolling();
+              runFcBtn.disabled = false;
+            }
+          };
+          // Start polling every 1s
+          pollTimer = setInterval(poll, 1000);
+          // Also poll once immediately
+          poll();
+        } catch (err) {
+          fcStatus.textContent = 'Error: ' + err.message;
+          fcStatus.style.color = '#c00';
+          add('Forecast error: ' + err.message);
+          runFcBtn.disabled = false;
+        }
+      };
+      uploadBtn.onclick = async (e) => {
         e.preventDefault();
         const f = fileEl.files[0];
         if (!f){

@@ -13,11 +13,48 @@ It loads employee, absence, and opening hours requirements from Excel, cost-effe
     - Create a virtual environment in the project folder and install dependencies (see requirements.txt)
 
 2) Start Server
-    - Start from project root: `python3 -m uvicorn app.api.main:app --host 127.0.0.1 --port 7001`
+    - From project root: `cd ShiftPlan_Agent_Demo && uvicorn app.api.main:app --host 127.0.0.1 --port 8008 --reload`
 
 3) Open Browser
-    - UI at `http://127.0.0.1:7001/ui/`
-    - Upload the Excel file there and then execute "Run".
+    - UI at `http://127.0.0.1:8008/ui/`
+    - Upload the Excel, click “Run Forecast”, then “Start Run”.
+
+## Forecasting
+
+For non‑technical users (layperson):
+1) Upload your Excel on the UI.
+2) Click “Run Forecast”. The system calculates how many Store Managers and Sales staff you likely need per day (for the dates shown in the Opening Hours sheet).
+3) When the status shows “Done”, you will see a short preview table in the UI.
+4) Click “Start Run” to build the detailed shift plan. The planner uses the newly written columns in the Excel (Opening Hours → “Store Manager” and “Sales”), so your usual planning flow stays the same.
+
+Notes:
+- The forecast writes the daily headcounts back into your Excel file (Opening Hours sheet). You don’t need a separate file.
+- The numbers are whole headcounts (1, 2, 3, …) and never below the “Base_*” minimums configured in the Modulation sheet.
+
+Technical details (for engineers):
+- Targets: Daily headcount per role (Actual_StoreManager, Actual_Sales from Modulation) used for training on past days; predictions for the future horizon (the dates present in Opening Hours).
+- Exogenous variables: Weather (1–5), SpecialOffer (1–5), and OpeningHours (sum of all From–To intervals per day from Opening Hours).
+- Features:
+  - Base_StoreManager, Base_Sales (strong priors, later enforced as minimums)
+  - OpeningHours (numeric hours)
+  - Weather, SpecialOffer (ordinal controls)
+  - Calendar: day-of-week, month
+  - Simple lags (lag-7, lag-14) when available
+- Models and constraints:
+  - Ensemble of HistGradientBoostingRegressor (Poisson loss) and PoissonRegressor (GLM), blended 0.6/0.4
+  - Predictions are clipped to be non-negative, floored to Base_*, then rounded up to integers
+- Asynchronous execution:
+  - Start: `POST /forecast/run` (returns immediately, starts a background job)
+  - Status + result: `GET /forecast/status` (fields: status=running|done|error, metrics, preview, file paths)
+  - The UI “Run Forecast” button uses this async flow and polls status every second
+- Excel write‑back safety:
+  - The Opening Hours sheet is updated via an atomic file replace (write a temporary workbook with all sheets, then replace the original) to avoid lock-related issues
+- Artifacts (for audit):
+  - forecast_output.csv and forecast_output.json are written next to your Excel (same folder as the source XLSX)
+- Troubleshooting:
+  - If status remains “running” for too long, ensure the Excel workbook is not open in another app
+  - Check server logs in the terminal for tracebacks
+  - Confirm the Excel is located in ShiftPlan_Agent_Demo/testdata/ or that the server has permissions to write to that directory
 
 ## The Agents – Who Does What?
 
@@ -146,6 +183,8 @@ If no credentials are set, the demo continues offline with rule-based fallbacks.
    - `POST /result` → Delivers result HTML with table.
    - `GET /inspect` → Shows loaded data (counts/samples).
    - `GET /llm_status` → Shows whether LLM is activated and which model is used.
+   - `POST /forecast/run` → Start forecasting asynchronously (returns immediately).
+   - `GET /forecast/status` → Check forecasting status and retrieve metrics/preview.
 
 ## Demo Limitations and Outlook
 

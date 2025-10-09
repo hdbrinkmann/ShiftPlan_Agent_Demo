@@ -8,3 +8,5 @@ ortools
 httpx
 python-dotenv
 python-multipart
+scikit-learn
+statsmodels
