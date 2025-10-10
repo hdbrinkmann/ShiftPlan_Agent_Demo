@@ -10,3 +10,4 @@ python-dotenv
 python-multipart
 scikit-learn
 statsmodels
+lightgbm

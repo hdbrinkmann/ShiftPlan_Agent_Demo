@@ -5,11 +5,11 @@ from typing import Tuple, Dict
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import PoissonRegressor
 from sklearn.metrics import mean_absolute_error
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
+import lightgbm as lgb
 import os
 import tempfile
 
@@ -198,25 +198,8 @@ def make_features_targets(df: pd.DataFrame, role: str) -> Tuple[pd.DataFrame, pd
 
 
 def make_model_pipeline() -> Pipeline:
-    # OneHot for categorical features, passthrough numerics
-    numeric_features = slice(0, 0)  # placeholder; will be set dynamically in function using ColumnTransformer? We'll just fit OneHot on explicit cat cols below
-    # We'll build preprocessor externally per X to keep it simple
-    # Define two models and average later
-    # HistGradientBoostingRegressor with Poisson loss
-    hgb = HistGradientBoostingRegressor(
-        loss="poisson",
-        max_depth=None,
-        learning_rate=0.08,
-        l2_regularization=1.0,
-        max_bins=255,
-        early_stopping=True,
-        random_state=42,
-    )
-    # PoissonRegressor (GLM)
-    pois = PoissonRegressor(alpha=0.5, max_iter=1000, tol=1e-8)
-
-    # We'll not wrap in a single sklearn Pipeline with ensembling; we fit both and blend.
-    # The returned Pipeline object is not used; retain for potential extension.
+    # Placeholder function retained for potential extension
+    # The actual models (LightGBM + Poisson GLM) are built directly in fit_and_predict
     return Pipeline(steps=[("noop", "passthrough")])
 
 
@@ -251,34 +234,47 @@ def fit_and_predict(train_df: pd.DataFrame, horizon_df: pd.DataFrame, role: str)
     X_train = pre.fit_transform(X_train_raw.loc[mask])
     X_h = pre.transform(X_h_raw)
 
-    # Fit two models
-    hgb = HistGradientBoostingRegressor(
-        loss="poisson",
-        max_depth=None,
-        learning_rate=0.08,
-        l2_regularization=1.0,
-        max_bins=255,
-        early_stopping=True,
+    # Monotone constraints: for LightGBM, we need to specify per feature in the transformed X
+    # After OneHotEncoder, we have: [num_cols..., one-hot dow, one-hot month]
+    # Monotone increasing for: base_col (index 0), OpenHours (1), Weather (2), SpecialOffer (3)
+    # Lags and categorical: no constraint (0)
+    num_features_count = len(num_cols)
+    cat_features_count = X_train.shape[1] - num_features_count
+    # base, OpenHours, Weather, SpecialOffer are first 4 in num_cols; lags are next 2
+    monotone_constraints_list = [1, 1, 1, 1, 0, 0] + [0] * cat_features_count
+
+    # Fit two models: LightGBM with Poisson + monotonic constraints, and Poisson GLM
+    lgbm = lgb.LGBMRegressor(
+        objective="poisson",
+        learning_rate=0.05,
+        n_estimators=100,
+        num_leaves=31,
+        max_depth=-1,
+        min_child_samples=10,
+        reg_alpha=0.1,
+        reg_lambda=0.1,
+        monotone_constraints=monotone_constraints_list,
         random_state=42,
+        verbosity=-1,
     )
     pois = PoissonRegressor(alpha=0.5, max_iter=1000, tol=1e-8)
 
     # Guard: clip negatives to 0
     y_train_clip = np.clip(y_train_arr[mask], a_min=0, a_max=None)
 
-    hgb.fit(X_train, y_train_clip)
+    lgbm.fit(X_train, y_train_clip)
     pois.fit(X_train, y_train_clip)
 
-    pred_h_hgb = np.maximum(hgb.predict(X_h), 0.0)
+    pred_h_lgbm = np.maximum(lgbm.predict(X_h), 0.0)
     pred_h_pois = np.maximum(pois.predict(X_h), 0.0)
 
     # Blend weights (we could tune; simple average for now)
-    pred_h = 0.6 * pred_h_hgb + 0.4 * pred_h_pois
+    pred_h = 0.6 * pred_h_lgbm + 0.4 * pred_h_pois
 
     # Backtest on train (optional quick check)
-    pred_t_hgb = np.maximum(hgb.predict(X_train), 0.0)
+    pred_t_lgbm = np.maximum(lgbm.predict(X_train), 0.0)
     pred_t_pois = np.maximum(pois.predict(X_train), 0.0)
-    pred_t = 0.6 * pred_t_hgb + 0.4 * pred_t_pois
+    pred_t = 0.6 * pred_t_lgbm + 0.4 * pred_t_pois
     mae = mean_absolute_error(y_train_clip, pred_t)
     metrics = {"train_mae": float(mae)}
 

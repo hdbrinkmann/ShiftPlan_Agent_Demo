@@ -11,6 +11,7 @@ It loads employee, absence, and opening hours requirements from Excel, cost-effe
 1) Install Prerequisites
     - Python 3.11
     - Create a virtual environment in the project folder and install dependencies (see requirements.txt)
+    - macOS users: LightGBM requires libomp. Install with `brew install libomp`
 
 2) Start Server
     - From project root: `cd ShiftPlan_Agent_Demo && uvicorn app.api.main:app --host 127.0.0.1 --port 8008 --reload`
@@ -41,7 +42,8 @@ Technical details (for engineers):
   - Calendar: day-of-week, month
   - Simple lags (lag-7, lag-14) when available
 - Models and constraints:
-  - Ensemble of HistGradientBoostingRegressor (Poisson loss) and PoissonRegressor (GLM), blended 0.6/0.4
+  - Ensemble of LightGBM (LGBMRegressor with Poisson objective and monotonic constraints) and PoissonRegressor (GLM), blended 0.6/0.4
+  - Monotonic constraints ensure predictions increase sensibly with Base_*, OpeningHours, Weather, and SpecialOffer
   - Predictions are clipped to be non-negative, floored to Base_*, then rounded up to integers
 - Asynchronous execution:
   - Start: `POST /forecast/run` (returns immediately, starts a background job)
