@@ -149,12 +149,22 @@ HTML = """
         const stopPolling = () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } };
 
         const renderPreview = (preview) => {
-          const rows = (Array.isArray(preview) ? preview : []).map(r =>
-            `<tr><td>${r.Date ?? ''}</td><td>${r['Store Manager'] ?? ''}</td><td>${r.Sales ?? ''}</td></tr>`
-          ).join('');
-          fcPreview.innerHTML = rows
-            ? `<table><thead><tr><th>Date</th><th>Store Manager</th><th>Sales</th></tr></thead><tbody>${rows}</tbody></table>`
-            : '<div class="muted">No preview</div>';
+          const arr = Array.isArray(preview) ? preview : [];
+          if (!arr.length) {
+            fcPreview.innerHTML = '<div class="muted">No preview</div>';
+            return;
+          }
+          // Determine dynamic columns from preview keys
+          const keysSet = new Set();
+          arr.forEach(r => Object.keys(r || {}).forEach(k => keysSet.add(k)));
+          // Ensure Date first, then OpenHours if present, then the rest
+          const keys = Array.from(keysSet);
+          const hasOpenHours = keys.includes('OpenHours');
+          const others = keys.filter(k => k !== 'Date' && k !== 'OpenHours');
+          const ordered = ['Date'].concat(hasOpenHours ? ['OpenHours'] : []).concat(others);
+          const thead = `<thead><tr>${ordered.map(k => `<th>${k}</th>`).join('')}</tr></thead>`;
+          const tbody = `<tbody>${arr.map(r => `<tr>${ordered.map(k => `<td>${(r && (r[k] ?? ''))}</td>`).join('')}</tr>`).join('')}</tbody>`;
+          fcPreview.innerHTML = `<table>${thead}${tbody}</table>`;
         };
 
         try {
@@ -189,7 +199,10 @@ HTML = """
               } else if (status === 'done') {
                 const payload = sjson.payload || {};
                 const m = payload.metrics || {};
-                fcStatus.textContent = `Done. Metrics (train MAE) — SM: ${m.SM ?? '-'}, Sales: ${m.Sales ?? '-'}`;
+                // Build dynamic metrics string: Role: value pairs
+                const parts = Object.keys(m).map(k => `${k}: ${m[k]}`);
+                const metricsStr = parts.length ? parts.join(', ') : '-';
+                fcStatus.textContent = `Done. Metrics (train MAE) — ${metricsStr}`;
                 fcStatus.style.color = '#0a0';
                 add('Forecast finished.');
                 renderPreview(payload.preview || []);

@@ -7,6 +7,7 @@ _STORE: Dict[str, Any] = {
     "employees": [],
     "absences": [],
     "demand": [],
+    "excel_path": None,
     "updated_at": None,
 }
 
@@ -30,3 +31,11 @@ def get_data() -> Tuple[list[dict], list[dict], list[dict]]:
 
 def has_any() -> bool:
     return bool(_STORE.get("employees") or _STORE.get("demand"))
+
+def set_excel_path(path: str | None) -> None:
+    _STORE["excel_path"] = str(path) if path else None
+    _STORE["updated_at"] = time.time()
+
+def get_excel_path() -> str | None:
+    p = _STORE.get("excel_path")
+    return str(p) if p else None

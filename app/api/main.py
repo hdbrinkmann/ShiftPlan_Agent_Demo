@@ -3,11 +3,12 @@ from pydantic import BaseModel
 from app.graph.build import build_graph
 from app.api.ui import router as ui_router
 from app.telemetry import publish_event
-from app.data.store import set_data
+from app.data.store import set_data, set_excel_path
 import time
 import pandas as pd
 from fastapi.responses import HTMLResponse
 from app.data.store import get_data
+from pathlib import Path
 from app.services.chat_intents import parse_message_to_intents, apply_intents
 from app.services.llm import ScalewayLLM
 from app.services.forecast import (
@@ -75,6 +76,17 @@ async def upload(file: UploadFile = File(...)):
         import io
         buf = io.BytesIO(content)
         xls = pd.read_excel(buf, sheet_name=None)
+
+        # Persist uploaded Excel and remember its path for forecasting
+        try:
+            base_dir = Path(__file__).resolve().parents[1] / "testdata"
+            base_dir.mkdir(parents=True, exist_ok=True)
+            saved_path = base_dir / "uploaded.xlsx"
+            saved_path.write_bytes(content)
+            set_excel_path(str(saved_path.resolve()))
+        except Exception as e:
+            # Do not fail upload on save issues; just continue without persisting
+            print(f"[UPLOAD] Warning: failed to persist uploaded Excel: {e}")
 
         # Normalize sheet-name dict to lowercase
         sheets_lower = {(name or "").strip().lower(): df for name, df in xls.items()}
