@@ -444,3 +444,104 @@ def chat(req: ChatRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Chat-Fehler: {str(e)}")
+
+@app.get("/timeline", response_class=HTMLResponse)
+def timeline(day: str = None):
+    """Generate timeline visualization for shifts"""
+    try:
+        from app.services.shift_visualizer import generate_timeline_html
+        
+        # Get current solution from running the graph
+        graph = build_graph()
+        initial_state = {
+            "status": "INIT",
+            "needs_approval": False,
+            "awaiting_approval": False,
+            "logs": [],
+        }
+        final_state = graph.invoke(initial_state, config={"auto_approve": True})
+        
+        # Get consolidated shifts
+        shifts = final_state.get("solution", {}).get("shifts", [])
+        
+        if not shifts:
+            return HTMLResponse(content="<h2>No shifts available. Please run the solver first.</h2>")
+        
+        # Get unique days and sort them chronologically (handle DD.MM.YYYY format)
+        unique_days_raw = set(s.get("day", "") for s in shifts if s.get("day"))
+        
+        def parse_german_date(date_str):
+            """Parse DD.MM.YYYY to sortable tuple"""
+            try:
+                parts = date_str.split(".")
+                if len(parts) == 3:
+                    return (int(parts[2]), int(parts[1]), int(parts[0]))  # (year, month, day)
+            except:
+                pass
+            return (9999, 12, 31)
+        
+        unique_days = sorted(unique_days_raw, key=parse_german_date)
+        
+        # If no day specified, use first day (chronologically)
+        selected_day = day if day in unique_days else (unique_days[0] if unique_days else None)
+        
+        if not selected_day:
+            return HTMLResponse(content="<h2>No valid days found in shifts</h2>")
+        
+        # Generate timeline HTML
+        timeline_html = generate_timeline_html(shifts, selected_day)
+        
+        # Build day selector dropdown
+        day_options = ''.join(
+            f'<option value="{d}" {"selected" if d == selected_day else ""}>{d}</option>'
+            for d in unique_days
+        )
+        
+        # Wrap in a complete page with day selector
+        page = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Shift Timeline</title>
+    <style>
+        .controls {{
+            text-align: center;
+            margin: 20px;
+            font-family: Arial, sans-serif;
+        }}
+        .controls select {{
+            padding: 8px 16px;
+            font-size: 16px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            margin-left: 10px;
+        }}
+        .controls label {{
+            font-size: 16px;
+            font-weight: bold;
+        }}
+    </style>
+</head>
+<body>
+    <h1 style="text-align: center; font-family: Arial;">Shift Plan Timeline</h1>
+    <div class="controls">
+        <label for="daySelect">Select Day:</label>
+        <select id="daySelect" onchange="window.location.href='/timeline?day=' + this.value;">
+            {day_options}
+        </select>
+    </div>
+    {timeline_html}
+    <div style="margin: 20px; text-align: center;">
+        <a href="/ui" style="padding: 10px 20px; background: #2c5f7c; color: white; text-decoration: none; border-radius: 5px;">Back to Monitor</a>
+    </div>
+</body>
+</html>
+        """
+        
+        return HTMLResponse(content=page)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return HTMLResponse(content=f"<h2>Error generating timeline: {str(e)}</h2>")

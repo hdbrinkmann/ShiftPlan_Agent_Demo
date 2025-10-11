@@ -65,6 +65,9 @@ HTML = """
     <div id="result">
       <h3>Result</h3>
       <div id="resultMeta" class="muted">Noch kein Ergebnis.</div>
+      <div style="margin: 10px 0;">
+        <button id="viewTimeline" style="padding: 8px 16px; background: #2c5f7c; color: white; border: none; border-radius: 4px; cursor: pointer;">📅 View Timeline</button>
+      </div>
       <div id="resultTableWrap"></div>
       <div id="resultStepsWrap"></div>
       <div id="auditWrap"></div>
@@ -440,6 +443,11 @@ HTML = """
             <tbody>${rows}</tbody>
           </table>`;
       }
+      
+      // Timeline view button handler
+      document.getElementById('viewTimeline').onclick = () => {
+        window.open('/timeline', '_blank');
+      };
     </script>
   </body>
   </html>

@@ -1,7 +1,7 @@
 from app.graph.state import PlanState
 from app.services import ingest as ingest_svc
 from app.data import store
-from app.services import solver as solver_svc
+from app.services import solver_optimal as solver_svc  # Using OR-Tools optimal solver
 from app.services import audit as audit_svc
 from app.services import kpi as kpi_svc
 from app.services import demand_processor
@@ -75,15 +75,15 @@ def demand_node(state: PlanState) -> PlanState:
         {"day": "Mon", "time": "09:00-18:00", "role": "sales", "qty": 1},
     ]
     
-    # Split demand into hourly granularity for better assignment flexibility
-    hourly_demand = demand_processor.split_demand_to_hourly(demand)
+    # New solver works directly with original demand blocks (no hourly splitting needed)
+    # It will generate optimal shift templates internally
     
     new_state: PlanState = {
         **state, 
-        "demand": hourly_demand,
-        "demand_original": demand,  # Keep original for reference
+        "demand": demand,
+        "demand_original": demand,  # Keep for reference
     }
-    log(new_state, f"Expanded core requirements into demand. rows={len(hourly_demand)} hourly (from {len(demand)} blocks, uploaded={'yes' if uploaded_demand else 'no'})")
+    log(new_state, f"Loaded demand requirements. rows={len(demand)} (uploaded={'yes' if uploaded_demand else 'no'})")
     return new_state
 
 def solve_node(state: PlanState) -> PlanState:

@@ -19,8 +19,13 @@ def compute(solution: Dict[str, Any], employees: List[Dict[str, Any]], demand: L
         covered += min(req, act)
     coverage = (covered / needed) if needed else 1.0
 
-    return {
+    result = {
         "cost": round(cost, 2),
         "coverage": round(coverage, 3),
-        **current,
     }
+    
+    # Merge with current if provided
+    if current:
+        result.update(current)
+    
+    return result
