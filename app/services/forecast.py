@@ -600,7 +600,23 @@ def fit_and_predict_dynamic(train_df: pd.DataFrame, horizon_df: pd.DataFrame, ro
     pred_t_pois = np.maximum(pois.predict(X_train), 0.0)
     pred_t = 0.6 * pred_t_lgbm + 0.4 * pred_t_pois
     mae = mean_absolute_error(y_train_clip, pred_t)
-    metrics = {"train_mae": float(mae)}
+    
+    # Extract feature importances from LightGBM
+    try:
+        imp = lgbm.feature_importances_
+        # Map back to original feature names (before transform)
+        feat_names = num_cols + cat_cols
+        if len(imp) >= len(feat_names):
+            # One-hot encoded features may expand cat_cols; use only first len(feat_names)
+            imp_dict = {feat_names[i]: float(imp[i]) for i in range(min(len(feat_names), len(imp)))}
+        else:
+            imp_dict = {feat_names[i]: float(imp[i]) for i in range(len(imp))}
+        # Top 10 by importance
+        top_imp = dict(sorted(imp_dict.items(), key=lambda x: x[1], reverse=True)[:10])
+    except Exception:
+        top_imp = {}
+    
+    metrics = {"train_mae": float(mae), "feature_importances": top_imp}
 
     # Assemble prediction frame
     out = horizon_df[["Date"]].copy()
@@ -833,6 +849,7 @@ def run_forecast(excel_path: Path | None = None) -> Dict[str, object]:
                 "dropped_constants": {"num": const_num[:10], "cat": const_cat[:10]},
                 "used_features": {"num": fnum[:10], "cat": fcat[:10]},
                 "missing_pct_top": miss_top,
+                "feature_importances": m.get("feature_importances", {}),
             }
             # Attach From/To if present using row-aligned concat to avoid cartesian duplication
             f_mod, t_mod = _pick_from_to(horizon_df_role)
