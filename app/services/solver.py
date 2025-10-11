@@ -151,6 +151,9 @@ def solve(employees: List[Dict[str, Any]], absences: List[Dict[str, Any]], const
     hours_day: DefaultDict[str, DefaultDict[str, float]] = defaultdict(lambda: defaultdict(float))
     hours_week: DefaultDict[str, float] = defaultdict(float)
     last_end: Dict[str, Tuple[int, int]] = {}
+    
+    # Track default weekly limit (37.5h for most employees)
+    default_max_week = float(hard.get("max_hours_per_week", 37.5))
 
     assignments: List[Dict[str, Any]] = []
 
@@ -190,7 +193,10 @@ def solve(employees: List[Dict[str, Any]], absences: List[Dict[str, Any]], const
         st = st if st is not None else 0
         return (_day_map.get(d, (0,3)), st, role_kind(str(need.get("role", ""))))
 
-    for need in sorted(demand or [], key=demand_sort_key):
+    # Process demand with shift-aware batching
+    sorted_demand = sorted(demand or [], key=demand_sort_key)
+    
+    for need in sorted_demand:
         role_raw = str(need.get("role", "")).strip()
         day = str(need.get("day", ""))
         time_span = str(need.get("time", ""))
@@ -250,18 +256,94 @@ def solve(employees: List[Dict[str, Any]], absences: List[Dict[str, Any]], const
 
         count = 0
         hours = _span_hours(time_span)
+        
+        # Shift-aware assignment: Try to extend existing shifts first
+        assigned_this_slot = set()
+        
+        # First pass: Try to continue existing employee assignments from this day
+        for rank, e in candidates:
+            eid = str(e.get("id"))
+            
+            # Check if this employee is already working this day and role
+            # Prefer to extend their shift rather than start a new one
+            already_working_today = False
+            for prev_assign in assignments:
+                if (prev_assign.get("employee_id") == eid and 
+                    prev_assign.get("day") == day and 
+                    prev_assign.get("role") == role_raw):
+                    # Check if this is a recent/adjacent timeslot
+                    prev_end_min = _span_minutes(prev_assign.get("time", ""))[1]
+                    curr_start_min = _span_minutes(time_span)[0]
+                    if prev_end_min is not None and curr_start_min is not None:
+                        # If the previous assignment ends within 2 hours of this start, prioritize continuing
+                        if abs(curr_start_min - prev_end_min) <= 120:  # within 2 hours
+                            already_working_today = True
+                            break
+            
+            if not already_working_today:
+                continue
+                
+            if count >= qty:
+                break
+            if eid in taken[(day, time_span)]:
+                continue
+            if eid in assigned_this_slot:
+                continue
+                
+            # Max/Tag
+            max_hours_per_day = float(hard.get("max_hours_per_day", 24))
+            if hours_day[eid][day] + hours > max_hours_per_day + 1e-6:
+                continue
+            # Max/Woche
+            emp_max_week = float(e.get("max_hours_week", 0) or 0)
+            max_week = emp_max_week if emp_max_week > 0 else default_max_week
+            if max_week > 0 and hours_week[eid] + hours > max_week + 1e-6:
+                continue
+            # Ruhezeit
+            st_min, en_min = _span_minutes(time_span)
+            if st_min is None or en_min is None:
+                st_min, en_min = 0, int(hours * 60)
+            d_idx, _prec = _day_map.get(day, (0, 3))
+            min_rest_hours = float(hard.get("min_rest_hours", 0))
+            if eid in last_end and min_rest_hours > 0:
+                ld_idx, ld_end = last_end[eid]
+                if d_idx > ld_idx:
+                    gap = (d_idx - ld_idx) * 24 * 60 + (st_min - ld_end)
+                    if gap < min_rest_hours * 60 - 1e-6:
+                        continue
+            
+            # Assign to continue existing shift
+            assignments.append({
+                "employee_id": eid,
+                "role": role_raw,
+                "day": day,
+                "time": time_span,
+                "hours": hours,
+                "cost_per_hour": float(e.get("hourly_cost", 0) or 0),
+            })
+            taken[(day, time_span)].add(eid)
+            assigned_this_slot.add(eid)
+            hours_day[eid][day] += hours
+            hours_week[eid] += hours
+            last_end[eid] = (_day_map.get(day, (0, 3))[0], en_min)
+            count += 1
+        
+        # Second pass: Assign new employees if still needed
         for rank, e in candidates:
             if count >= qty:
                 break
             eid = str(e.get("id"))
             if eid in taken[(day, time_span)]:
                 continue
+            if eid in assigned_this_slot:
+                continue
             # Max/Tag
             max_hours_per_day = float(hard.get("max_hours_per_day", 24))
             if hours_day[eid][day] + hours > max_hours_per_day + 1e-6:
                 continue
-            # Max/Woche (falls pro MA gesetzt)
-            max_week = float(e.get("max_hours_week", 0) or 0)
+            # Max/Woche: Check both employee-specific and default weekly limit
+            emp_max_week = float(e.get("max_hours_week", 0) or 0)
+            max_week = emp_max_week if emp_max_week > 0 else default_max_week
             if max_week > 0 and hours_week[eid] + hours > max_week + 1e-6:
                 continue
             # Ruhezeit (zwischen Tagen)

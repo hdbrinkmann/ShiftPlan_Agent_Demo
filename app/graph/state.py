@@ -11,6 +11,7 @@ class PlanState(TypedDict, total=False):
     absences: List[Dict[str, Any]]
     constraints: Dict[str, Any]
     demand: List[Dict[str, Any]]
+    demand_original: List[Dict[str, Any]]  # Original demand before hourly splitting
     solution: Dict[str, Any]
     audit: Dict[str, Any]
     kpis: Dict[str, Any]

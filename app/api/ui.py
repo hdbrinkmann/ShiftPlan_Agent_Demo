@@ -343,10 +343,36 @@ HTML = """
           : '';
         resultMetaEl.innerHTML = `<b>Status:</b> ${status} | <b>Cost:</b> ${cost} | <b>Coverage:</b> ${coverage}${budgetHtml}`;
 
+        // Check if we have consolidated shifts (employee-centric view)
+        const shifts = (data && data.solution && Array.isArray(data.solution.shifts)) ? data.solution.shifts : [];
         const assignments = (data && data.solution && Array.isArray(data.solution.assignments)) ? data.solution.assignments : [];
-        if (!assignments.length){
+        
+        if (!shifts.length && !assignments.length){
           resultTableWrap.innerHTML = '<div class="muted">Keine Zuweisungen erzeugt.</div>';
+        } else if (shifts.length) {
+          // Employee-centric view with consolidated shifts
+          let rows = shifts.map(s => {
+            const day = s.day ?? '';
+            const empName = s.employee_name ?? s.employee_id ?? '';
+            const empId = s.employee_id ?? '';
+            const role = s.role ?? '';
+            const start = (s.shift_start ?? '').substring(0, 5); // HH:MM
+            const end = (s.shift_end ?? '').substring(0, 5); // HH:MM
+            const time = `${start}-${end}`;
+            const hours = s.hours ?? '';
+            const cost = s.cost ?? '';
+            return `<tr><td>${day}</td><td>${empName} (${empId})</td><td>${role}</td><td>${time}</td><td>${hours}</td><td>${cost}</td></tr>`;
+          }).join('');
+          const table = `
+            <table>
+              <thead>
+                <tr><th>Day</th><th>Employee</th><th>Role</th><th>Shift (From-To)</th><th>Hours</th><th>Cost</th></tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>`;
+          resultTableWrap.innerHTML = table;
         } else {
+          // Fallback: raw assignments view
           let rows = assignments.map(a => {
             const day = a.day ?? '';
             const time = a.time ?? '';

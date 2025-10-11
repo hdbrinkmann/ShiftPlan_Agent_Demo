@@ -4,6 +4,8 @@ from app.data import store
 from app.services import solver as solver_svc
 from app.services import audit as audit_svc
 from app.services import kpi as kpi_svc
+from app.services import demand_processor
+from app.services import shift_formatter
 
 def log(state: PlanState, message: str) -> None:
     state.setdefault("logs", []).append(message)
@@ -46,6 +48,7 @@ def rules_node(state: PlanState) -> PlanState:
     constraints = {
         "hard": {
             "max_hours_per_day": 8,
+            "max_hours_per_week": 37.5,  # Default weekly limit for employees
             "min_rest_hours": 11,
             "require_skill_match": True,
         },
@@ -71,19 +74,37 @@ def demand_node(state: PlanState) -> PlanState:
         {"day": "Mon", "time": "13:00-18:00", "role": "cashier", "qty": 2},
         {"day": "Mon", "time": "09:00-18:00", "role": "sales", "qty": 1},
     ]
-    new_state: PlanState = {**state, "demand": demand}
-    log(new_state, f"Expanded core requirements into demand. rows={len(demand)} (uploaded={'yes' if uploaded_demand else 'no'})")
+    
+    # Split demand into hourly granularity for better assignment flexibility
+    hourly_demand = demand_processor.split_demand_to_hourly(demand)
+    
+    new_state: PlanState = {
+        **state, 
+        "demand": hourly_demand,
+        "demand_original": demand,  # Keep original for reference
+    }
+    log(new_state, f"Expanded core requirements into demand. rows={len(hourly_demand)} hourly (from {len(demand)} blocks, uploaded={'yes' if uploaded_demand else 'no'})")
     return new_state
 
 def solve_node(state: PlanState) -> PlanState:
+    employees = state.get("employees", [])
     solution = solver_svc.solve(
-        employees=state.get("employees", []),
+        employees=employees,
         absences=state.get("absences", []),
         constraints=state.get("constraints", {}),
         demand=state.get("demand", []),
     )
+    
+    # Consolidate assignments into employee-centric shifts
+    raw_assignments = solution.get("assignments", [])
+    consolidated_shifts = shift_formatter.consolidate_shifts(raw_assignments, employees)
+    
+    # Store both formats
+    solution["shifts"] = consolidated_shifts
+    solution["assignments_raw"] = raw_assignments
+    
     new_state: PlanState = {**state, "status": "SOLVED", "solution": solution}
-    log(new_state, "Solved schedule (stub).")
+    log(new_state, f"Solved schedule. {len(raw_assignments)} assignments -> {len(consolidated_shifts)} shifts.")
     return new_state
 
 def audit_node(state: PlanState) -> PlanState:
