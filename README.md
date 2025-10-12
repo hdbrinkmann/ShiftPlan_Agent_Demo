@@ -4,7 +4,7 @@ This demo shows how a small "agent swarm" collaboratively creates a shift plan �
 
 ## What the Application Does – In One Sentence
 
-It loads employee, absence, and opening hours requirements from Excel, cost-effectively assigns the right employees to time blocks (Store Manager including Assistant as backup, Sales), checks rules, and displays the result as a table in the browser.
+It loads employee, absence, and opening‑hours requirements from Excel, forecasts daily/period demand with LightGBM, optimally assigns employees using an OR‑Tools CP‑SAT solver (with heuristic alternatives available), checks rules, and displays the result in the browser.
 
 ## How to Start the Demo
 
@@ -18,33 +18,44 @@ It loads employee, absence, and opening hours requirements from Excel, cost-effe
 
 3) Open Browser
     - UI at `http://127.0.0.1:8008/ui/`
-    - Upload the Excel, click “Run Forecast”, then “Start Run”.
+    - Upload your Excel; the forecast runs automatically, then the agentic flow generates the final shift plan.
+    - Timeline (chart-based) at `http://127.0.0.1:8008/timeline` to visualize shifts interactively per day.
 
 ## Forecasting
 
 For non‑technical users (layperson):
-1) Upload your Excel on the UI.
-2) Click “Run Forecast”. The system calculates how many Store Managers and Sales staff you likely need per day (for the dates shown in the Opening Hours sheet).
-3) When the status shows “Done”, you will see a short preview table in the UI.
-4) Click “Start Run” to build the detailed shift plan. The planner uses the newly written columns in the Excel (Opening Hours → “Store Manager” and “Sales”), so your usual planning flow stays the same.
+1) Upload your Excel on the UI. The forecast starts automatically.
+2) The system calculates how many Store Managers and Sales staff you likely need per day/period (for the dates shown in the Opening Hours sheet).
+3) After the forecast finishes, the agentic flow runs automatically to build the detailed shift plan.
+4) View the plan in the Result section and the chart-based Timeline. The planner uses the newly written columns in the Excel (Opening Hours → “Store Manager” and “Sales”), so your usual planning flow stays the same.
 
 Notes:
 - The forecast writes the daily headcounts back into your Excel file (Opening Hours sheet). You don’t need a separate file.
 - The numbers are whole headcounts (1, 2, 3, …) and never below the “Base_*” minimums configured in the Modulation sheet.
 
 Technical details (for engineers):
-- Targets: Daily headcount per role (Actual_StoreManager, Actual_Sales from Modulation) used for training on past days; predictions for the future horizon (the dates present in Opening Hours).
-- Exogenous variables: Weather (1–5), SpecialOffer (1–5), and OpeningHours (sum of all From–To intervals per day from Opening Hours).
-- Features:
-  - Base_StoreManager, Base_Sales (strong priors, later enforced as minimums)
-  - OpeningHours (numeric hours)
-  - Weather, SpecialOffer (ordinal controls)
-  - Calendar: day-of-week, month
-  - Simple lags (lag-7, lag-14) when available
-- Models and constraints:
-  - Ensemble of LightGBM (LGBMRegressor with Poisson objective and monotonic constraints) and PoissonRegressor (GLM), blended 0.6/0.4
-  - Monotonic constraints ensure predictions increase sensibly with Base_*, OpeningHours, Weather, and SpecialOffer
-  - Predictions are clipped to be non-negative, floored to Base_*, then rounded up to integers
+- Targets:
+  - Period mode: `y::<Role>` per From/To slot when both Modulation and Opening Hours provide From/To
+  - Daily fallback: `y::<Role>` per day when no period slots are available
+- Drivers/features:
+  - OpenHours (from Opening Hours) and calendar features (dow/week/month/is_weekend)
+  - Numeric/categorical drivers coming from Modulation (auto-aggregated daily; period mode uses slot-level drivers)
+  - Lags: daily lag-7/lag-14 per role; period mode adds per-slot lag1d/lag7d
+- Modeling:
+  - Ensemble of LightGBM (LGBMRegressor, objective="poisson") and PoissonRegressor (GLM), blended 0.6/0.4
+  - Categorical preprocessing with one‑hot; numeric imputation for GLM compatibility
+- Post-processing:
+  - Negative values are clipped to 0
+  - Predictions are floored to any `base::<Role>` columns if present, then rounded to integers
+- Write-back and artifacts:
+  - Writes back into Opening Hours by Date+From/To when possible; otherwise by Date
+  - Exports `forecast_output.csv` and `forecast_output.json` next to the Excel file
+  - The UI preview shows a compact sample and an optional float‑preview for inspection
+- Implementation (source, `app/services/forecast.py`):
+  - `run_forecast`: orchestrates period vs. daily modes and assembles metrics/preview
+  - `fit_and_predict_dynamic`: trains LightGBM `LGBMRegressor` (objective="poisson") and `PoissonRegressor`, blended 0.6/0.4
+  - `write_forecast_into_opening_hours`: writes predictions back to Opening Hours (by Date+From/To when available)
+  - `export_forecast_files`: exports forecast_output.csv/json for auditing
 - Asynchronous execution:
   - Start: `POST /forecast/run` (returns immediately, starts a background job)
   - Status + result: `GET /forecast/status` (fields: status=running|done|error, metrics, preview, file paths)
@@ -75,12 +86,19 @@ The logic is implemented as a chain of "agents" (nodes). Each agent has a clearl
    - Result: A list of rows like: day, time span, role, quantity.
 
 - Solver Agent (`solve_node`)
-   - Task: Assign employees to demand peaks – cost-effectively and rule-compliant.
-   - Approach (simplified):
-      - For "Store Manager", real Store Managers are assigned first, then Assistant/Deputy as backup.
-      - For "Sales", Sales profiles are used; optionally "Cashier" can help out.
-      - Candidates are sorted by (match quality, cost) and a small fairness factor. Slight rotation prevents always taking the same ones first.
-      - Double-booking of the same person in the identical time block is prevented. Absences and simple max-hours/rest-time rules are considered.
+   - Task: Assign employees to demand so that every hour is covered while minimizing staff used and cost.
+   - Default solver (Google OR-Tools CP-SAT, `app/services/solver_optimal.py`):
+      - Powered by Google OR-Tools (CP-SAT)
+      - Builds shift opportunities (8h templates plus demand-aligned 4h blocks).
+      - Constraints: cover every hour’s required headcount; each employee works at most one shift per day.
+      - Objective: primarily minimize the number of employees used, with a small secondary cost penalty.
+      - Output: concrete assignments that are consolidated into employee shifts for display.
+   - Alternative solvers (optional):
+      - Greedy headcount solver: `app/services/solver.py`
+      - Shift-first optimizer: `app/services/solver_v2.py` (generates templates, then assigns)
+      - Switch solver by editing `app/graph/nodes.py`:
+        - Change `from app.services import solver_optimal as solver_svc`
+        - To e.g. `from app.services import solver as solver_svc` or `from app.services import solver_v2 as solver_svc`
    - Result: A list of "assignments" with day, time, role, employee, hours, and cost/h.
 
 - Audit Agent (`audit_node`)
@@ -187,10 +205,11 @@ If no credentials are set, the demo continues offline with rule-based fallbacks.
    - `GET /llm_status` → Shows whether LLM is activated and which model is used.
    - `POST /forecast/run` → Start forecasting asynchronously (returns immediately).
    - `GET /forecast/status` → Check forecasting status and retrieve metrics/preview.
+   - `GET /timeline` → Chart-based timeline of shifts per day for interactive visualization of the final plan.
 
 ## Demo Limitations and Outlook
 
-- The solver is intentionally simple (greedy) but already delivers usable results. For complex plans, an optimizer (e.g., OR-Tools) can be integrated.
+- Default solver uses OR-Tools CP-SAT and covers hourly demand with one shift per employee per day plus a small cost term. Richer labor rules (weekly caps, rest times, sequences, preferences, breaks, etc.) are on the roadmap; the existing greedy and shift-first heuristics remain available as alternatives.
 - The rules are minimal and can be extended (breaks, tariff rules, shift sequences, preferences …).
 - Export is currently a placeholder – here files or system interfaces could be connected.
 

@@ -27,6 +27,7 @@ HTML = """
   #agents { margin-top: 16px; }
   #agents table { border-collapse: collapse; }
   #agents th, #agents td { border:1px solid #ddd; padding:4px 6px; }
+  .hidden { display: none; }
     </style>
   </head>
   <body>
@@ -35,8 +36,8 @@ HTML = """
       <label>Run ID: <input id="runId" value="default" /></label>
       <label>Budget: <input id="budget" type="number" step="0.01" placeholder="optional" /></label>
       <label><input id="autoApprove" type="checkbox" checked /> Auto-approve</label>
-      <button id="connect">Connect</button>
-      <button id="startRun">Start Run</button>
+      <button id="connect" class="hidden">Connect</button>
+      <button id="startRun" class="hidden">Start Run</button>
     </div>
     <div style="margin:8px 0;">
       <form id="uploadForm">
@@ -47,20 +48,18 @@ HTML = """
     </div>
     <div id="status">Not connected.</div>
     <div id="active">Active node: <span class="active" id="node">-</span></div>
+    <div id="forecast" style="margin-top:16px; padding-top:8px; border-top:1px solid #eee;">
+      <h3>Forecast</h3>
+      <button id="runForecast" class="hidden">Run Forecast</button>
+      <span id="forecastStatus" class="muted" style="margin-left:8px;"></span>
+      <div id="forecastPreview" style="margin-top:8px;"></div>
+    </div>
     <div id="agents">
       <h3>Agent details</h3>
       <div class="muted">Letzte Meldung je Agent</div>
       <div id="agentPanel"></div>
     </div>
-    <h3>Events</h3>
-    <div id="events"></div>
 
-    <div id="forecast" style="margin-top:16px; padding-top:8px; border-top:1px solid #eee;">
-      <h3>Forecast</h3>
-      <button id="runForecast">Run Forecast</button>
-      <span id="forecastStatus" class="muted" style="margin-left:8px;"></span>
-      <div id="forecastPreview" style="margin-top:8px;"></div>
-    </div>
 
     <div id="result">
       <h3>Result</h3>
@@ -114,14 +113,22 @@ HTML = """
         es.addEventListener('update', (e) => {
           try {
             const data = JSON.parse(e.data);
-            if (data.active_node) nodeEl.textContent = data.active_node;
+            if (data.active_node) {
+              nodeEl.textContent = data.active_node;
+              // Prefer rich, live messages. Do not overwrite with generic "completed"
+              // if we already have a meaningful message.
+              const msg = (typeof data.message === 'string' && data.message.trim()) ? data.message : '(update)';
+              const prev = nodeInsights[data.active_node];
+              const isCompletion = (msg === 'completed');
+              const isPlaceholder = (!prev || prev === '-' || prev === '(update)');
+              if (!isCompletion || isPlaceholder) {
+                nodeInsights[data.active_node] = msg;
+                renderAgentPanel();
+              }
+            }
             if (data.message){
               const prefix = data.active_node ? `[${data.active_node}] ` : '';
               add(prefix + data.message);
-              if (data.active_node){
-                nodeInsights[data.active_node] = data.message;
-                renderAgentPanel();
-              }
             }
           } catch(err) { add('bad event: ' + e.data) }
         });
@@ -243,6 +250,148 @@ HTML = """
           runFcBtn.disabled = false;
         }
       };
+
+      // Helpers for auto pipeline: forecast -> connect SSE -> run graph
+      async function runForecastPipeline() {
+        fcStatus.textContent = 'Starting forecast...';
+        fcStatus.style.color = '#555';
+        fcPreview.innerHTML = '';
+
+        let pollTimer = null;
+        const stopPolling = () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } };
+
+        const renderPreview = (preview) => {
+          const arr = Array.isArray(preview) ? preview : [];
+          if (!arr.length) {
+            fcPreview.innerHTML = '<div class="muted">No preview</div>';
+            return;
+          }
+          const keysSet = new Set();
+          arr.forEach(r => Object.keys(r || {}).forEach(k => keysSet.add(k)));
+          const keys = Array.from(keysSet);
+          const hasOpenHours = keys.includes('OpenHours');
+          const others = keys.filter(k => k !== 'Date' && k !== 'OpenHours');
+          const ordered = ['Date'].concat(hasOpenHours ? ['OpenHours'] : []).concat(others);
+          const thead = `<thead><tr>${ordered.map(k => `<th>${k}</th>`).join('')}</tr></thead>`;
+          const tbody = `<tbody>${arr.map(r => `<tr>${ordered.map(k => `<td>${(r && (r[k] ?? ''))}</td>`).join('')}</tr>`).join('')}</tbody>`;
+          fcPreview.innerHTML = `<table>${thead}${tbody}</table>`;
+        };
+
+        const startForecast = async () => {
+          const res = await fetch('/forecast/run', { method: 'POST' });
+          const json = await res.json();
+          if (!res.ok || json.ok === false) {
+            const msg = json.detail || 'Forecast failed to start';
+            throw new Error(msg);
+          }
+        };
+
+        const pollOnce = async () => {
+          const sres = await fetch('/forecast/status');
+          const sjson = await sres.json();
+          if (!sres.ok || sjson.ok === false) {
+            const msg = sjson.detail || 'Status fetch failed';
+            throw new Error(msg);
+          }
+          const status = sjson.status || 'idle';
+          if (status === 'running') {
+            fcStatus.textContent = 'Forecast running...';
+            fcStatus.style.color = '#555';
+            return { done: false };
+          } else if (status === 'done') {
+            const payload = sjson.payload || {};
+            const m = payload.metrics || {};
+            const parts = Object.keys(m).map(k => `${k}: ${m[k]}`);
+            const metricsStr = parts.length ? parts.join(', ') : '-';
+            fcStatus.textContent = `Done. Metrics (train MAE) — ${metricsStr}`;
+            fcStatus.style.color = '#0a0';
+            add('Forecast finished.');
+            renderPreview(payload.preview || []);
+            return { done: true, payload };
+          } else if (status === 'error') {
+            const emsg = sjson.error || 'unknown error';
+            fcStatus.textContent = 'Error: ' + emsg;
+            fcStatus.style.color = '#c00';
+            add('Forecast error: ' + emsg);
+            throw new Error(emsg);
+          } else {
+            fcStatus.textContent = 'Idle.';
+            fcStatus.style.color = '#777';
+            return { done: true };
+          }
+        };
+
+        await startForecast();
+        return await new Promise((resolve, reject) => {
+          pollTimer = setInterval(async () => {
+            try {
+              const r = await pollOnce();
+              if (r.done) { stopPolling(); resolve(r.payload || {}); }
+            } catch (e) { stopPolling(); reject(e); }
+          }, 1000);
+          // initial poll
+          pollOnce().then(r => { if (r.done) { stopPolling(); resolve(r.payload || {}); } }).catch(e => { stopPolling(); reject(e); });
+        });
+      }
+
+      function connectSSEWithRunId(runId) {
+        if (es) es.close();
+        const rid = encodeURIComponent(runId || 'default');
+        es = new EventSource(`/ui/stream/${rid}`);
+        es.onopen = () => { statusEl.textContent = 'Connected.'; };
+        es.addEventListener('hello', (e) => add(`hello: ${e.data}`));
+        es.addEventListener('update', (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.active_node) {
+              nodeEl.textContent = data.active_node;
+              // Prefer rich, live messages. Do not overwrite with generic "completed"
+              // if we already have a meaningful message.
+              const msg = (typeof data.message === 'string' && data.message.trim()) ? data.message : '(update)';
+              const prev = nodeInsights[data.active_node];
+              const isCompletion = (msg === 'completed');
+              const isPlaceholder = (!prev || prev === '-' || prev === '(update)');
+              if (!isCompletion || isPlaceholder) {
+                nodeInsights[data.active_node] = msg;
+                renderAgentPanel();
+              }
+            }
+            if (data.message){
+              const prefix = data.active_node ? `[${data.active_node}] ` : '';
+              add(prefix + data.message);
+            }
+          } catch(err) { add('bad event: ' + e.data) }
+        });
+        es.onerror = (e) => { statusEl.textContent = 'Error / disconnected'; };
+      }
+
+      async function runGraphWithRunId(runId) {
+        const body = { run_id: runId || 'default', auto_approve: !!autoApproveEl.checked };
+        const b = parseFloat(budgetEl.value);
+        if (!isNaN(b)) body.budget = b;
+        resultMetaEl.textContent = 'Berechne...';
+        resultTableWrap.innerHTML = '';
+        resultStepsWrap.innerHTML = '';
+        const res = await fetch('/run', { method:'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+        const json = await res.json();
+        add('Run finished.');
+        renderResult(json);
+        // Fallback sync update: if SSE missed some node updates, populate agent panel from executed steps
+        try {
+          const steps = Array.isArray(json?.steps) ? json.steps : [];
+          if (steps.length){
+            steps.forEach(s => {
+              const prev = nodeInsights[s];
+              if (!prev || prev === '-' || prev === '(update)') {
+                nodeInsights[s] = 'completed';
+              }
+            });
+            renderAgentPanel();
+          }
+        } catch (_e) { /* noop */ }
+        return json;
+      }
+
       uploadBtn.onclick = async (e) => {
         e.preventDefault();
         const f = fileEl.files[0];
@@ -268,6 +417,17 @@ HTML = """
             const insp = await fetch('/inspect').then(r=>r.json());
             add('Store counts -> employees: ' + insp.counts.employees + ', absences: ' + insp.counts.absences + ', demand: ' + insp.counts.demand);
           } catch(e) { /* ignore */ }
+
+          // Auto pipeline: forecast -> connect SSE -> run agentic flow
+          try {
+            await runForecastPipeline();
+            const rid = String(Date.now());
+            runInput.value = rid;
+            connectSSEWithRunId(rid);
+            await runGraphWithRunId(rid);
+          } catch(e) {
+            add('Auto pipeline error: ' + (e && e.message ? e.message : e));
+          }
         } catch(err){
           uploadStatus.textContent = 'Error: ' + err.message;
           uploadStatus.style.color = '#c00';
@@ -328,6 +488,7 @@ HTML = """
         }
       };
       function add(msg){
+        if (!eventsEl) return;
         const div = document.createElement('div');
         div.className = 'log';
         div.textContent = msg;

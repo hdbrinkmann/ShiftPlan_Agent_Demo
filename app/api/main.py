@@ -18,6 +18,7 @@ from app.services.forecast import (
 )
 import threading
 import json
+import asyncio
 
 app = FastAPI(title="Shift Planning Sample (LangGraph)")
 app.include_router(ui_router, prefix="/ui", tags=["ui"])
@@ -38,7 +39,7 @@ class ChatRequest(BaseModel):
     budget: float | None = None
 
 @app.post("/run")
-def run(req: RunRequest):
+async def run(req: RunRequest):
     graph = build_graph()
     run_id = req.run_id or str(int(time.time()*1000))
     # Initial input/state seed
@@ -51,7 +52,51 @@ def run(req: RunRequest):
         "run_id": run_id,
     }
     publish_event(run_id, {"message": "Run started", "active_node": "ingest"})
-    final_state = graph.invoke(initial_state, config={"auto_approve": req.auto_approve})
+    final_state = await asyncio.to_thread(graph.invoke, initial_state, config={"auto_approve": req.auto_approve})
+    # Ensure UI receives at least one rich update per executed step (fallback if any live SSE got missed)
+    try:
+        steps = (final_state.get("steps") or [])
+        for step_name in steps:
+            msg = None
+            if step_name == "ingest":
+                emp = len(final_state.get("employees", []) or [])
+                absn = len(final_state.get("absences", []) or [])
+                msg = f"Ingest: employees={emp}, absences={absn}"
+            elif step_name == "demand_step":
+                dem = len(final_state.get("demand", []) or [])
+                msg = f"Demand: requirements={dem}"
+            elif step_name == "solve":
+                assigns = len(((final_state.get("solution", {}) or {}).get("assignments", []) or []))
+                msg = f"Solver: assignments={assigns}"
+            elif step_name == "audit_step":
+                viols = ((final_state.get("audit", {}) or {}).get("violations", []) or [])
+                high = sum(1 for v in viols if v.get("severity") == "high")
+                med = sum(1 for v in viols if v.get("severity") == "medium")
+                msg = f"Audit: violations={len(viols)} (high={high}, medium={med})"
+            elif step_name == "kpi":
+                k = (final_state.get("kpis", {}) or {})
+                cost = k.get("cost")
+                cov = k.get("coverage")
+                budget = k.get("budget")
+                over = (budget is not None and cost is not None and cost > budget)
+                tail = " over budget" if over else (" within budget" if budget is not None else "")
+                msg = f"KPI: cost={cost}, coverage={cov}{tail}"
+            elif step_name == "triage":
+                needs = bool(final_state.get("needs_approval"))
+                relax = len(final_state.get("relaxations", []) or [])
+                msg = f"Triage: needs_approval={needs}, relaxations={relax}"
+            elif step_name == "human_gate":
+                if final_state.get("awaiting_approval"):
+                    msg = "Human gate: awaiting manual approval"
+                else:
+                    msg = "Human gate: approved -> re-solve"
+            elif step_name == "export":
+                msg = "Export: plan finalized"
+            else:
+                msg = "completed"
+            publish_event(run_id, {"active_node": step_name, "message": msg})
+    except Exception:
+        pass
     publish_event(run_id, {"message": "Run finished", "active_node": None})
     return {"run_id": run_id, **final_state}
 
