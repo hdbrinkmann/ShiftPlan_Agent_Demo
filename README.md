@@ -4,7 +4,7 @@ This demo shows how a small "agent swarm" collaboratively creates a shift plan �
 
 ## What the Application Does – In One Sentence
 
-It loads employee, absence, and opening‑hours requirements from Excel, forecasts daily/period demand with LightGBM, optimally assigns employees using an OR‑Tools CP‑SAT solver (with heuristic alternatives available), checks rules, and displays the result in the browser.
+It loads employee, absence, and opening‑hours requirements from Excel, forecasts daily/period demand with LightGBM, optimally assigns employees using an OR‑Tools CP‑SAT solver, checks rules, and displays the result in the browser.
 
 ## How to Start the Demo
 
@@ -87,18 +87,12 @@ The logic is implemented as a chain of "agents" (nodes). Each agent has a clearl
 
 - Solver Agent (`solve_node`)
    - Task: Assign employees to demand so that every hour is covered while minimizing staff used and cost.
-   - Default solver (Google OR-Tools CP-SAT, `app/services/solver_optimal.py`):
+      - Solver (Google OR-Tools CP-SAT, `app/services/solver_optimal.py`):
       - Powered by Google OR-Tools (CP-SAT)
       - Builds shift opportunities (8h templates plus demand-aligned 4h blocks).
       - Constraints: cover every hour’s required headcount; each employee works at most one shift per day.
       - Objective: primarily minimize the number of employees used, with a small secondary cost penalty.
       - Output: concrete assignments that are consolidated into employee shifts for display.
-   - Alternative solvers (optional):
-      - Greedy headcount solver: `app/services/solver.py`
-      - Shift-first optimizer: `app/services/solver_v2.py` (generates templates, then assigns)
-      - Switch solver by editing `app/graph/nodes.py`:
-        - Change `from app.services import solver_optimal as solver_svc`
-        - To e.g. `from app.services import solver as solver_svc` or `from app.services import solver_v2 as solver_svc`
    - Result: A list of "assignments" with day, time, role, employee, hours, and cost/h.
 
 - Audit Agent (`audit_node`)
@@ -209,7 +203,7 @@ If no credentials are set, the demo continues offline with rule-based fallbacks.
 
 ## Demo Limitations and Outlook
 
-- Default solver uses OR-Tools CP-SAT and covers hourly demand with one shift per employee per day plus a small cost term. Richer labor rules (weekly caps, rest times, sequences, preferences, breaks, etc.) are on the roadmap; the existing greedy and shift-first heuristics remain available as alternatives.
+- Default solver uses OR-Tools CP-SAT and covers hourly demand with one shift per employee per day plus a small cost term. Richer labor rules (weekly caps, rest times, sequences, preferences, breaks, etc.) are on the roadmap.
 - The rules are minimal and can be extended (breaks, tariff rules, shift sequences, preferences …).
 - Export is currently a placeholder – here files or system interfaces could be connected.
 

@@ -2,10 +2,10 @@
 Optimal Shift Solver using OR-Tools Constraint Programming
 Finds the optimal shift assignment that minimizes total employees while meeting all demand.
 """
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from collections import defaultdict
 from datetime import datetime
-from ortools.sat.python import cp_model
+from ortools.sat.python import cp_model  # type: ignore
 
 
 def solve(employees: List[Dict[str, Any]], absences: List[Dict[str, Any]], 
@@ -43,7 +43,7 @@ def solve(employees: List[Dict[str, Any]], absences: List[Dict[str, Any]],
         # Solve using OR-Tools
         assignments = _solve_with_ortools(
             eligible_emps, shifts, role_demand, day, role,
-            max_hours_per_day, max_hours_per_week
+            max_hours_per_day, max_hours_per_week, blocked
         )
         
         all_assignments.extend(assignments)
@@ -53,38 +53,46 @@ def solve(employees: List[Dict[str, Any]], absences: List[Dict[str, Any]],
 
 def _solve_with_ortools(eligible_emps: List[Dict], shifts: List[Dict], 
                         role_demand: List[Dict], day: str, role: str,
-                        max_hours_day: float, max_hours_week: float) -> List[Dict]:
+                        max_hours_day: float, max_hours_week: float, blocked: Dict) -> List[Dict]:
     """Use OR-Tools CP-SAT to find optimal assignment"""
     
     model = cp_model.CpModel()
     
-    # Variables: x[employee][shift] = 1 if employee assigned to shift, 0 otherwise
+    # Variables: x[(employee, shift)] = 1 if employee is assigned (and available), 0 otherwise
     x = {}
+    emp_shift_vars = defaultdict(list)
     for emp in eligible_emps:
         eid = emp["id"]
         for i, shift in enumerate(shifts):
-            x[(eid, i)] = model.NewBoolVar(f"assign_{eid}_shift_{i}")
+            if _is_available_for_shift(eid, day, shift["start_min"], shift["end_min"], blocked):
+                var = model.NewBoolVar(f"assign_{eid}_shift_{i}")
+                x[(eid, i)] = var
+                emp_shift_vars[eid].append(var)
     
     # Build hourly demand requirements
     hours_demand = _build_hourly_demand(role_demand)
     
     # Constraint: Each hour must have required number of people
     for hour, required_qty in hours_demand.items():
-        # Find which shifts cover this hour
+        # Find which available shifts cover this hour
         covering_vars = []
         for emp in eligible_emps:
             eid = emp["id"]
             for i, shift in enumerate(shifts):
-                if shift["start_h"] <= hour < shift["end_h"]:
+                if shift["start_h"] <= hour < shift["end_h"] and (eid, i) in x:
                     covering_vars.append(x[(eid, i)])
         
         if covering_vars:
             model.Add(sum(covering_vars) >= required_qty)
+        else:
+            # If nobody is available to cover this hour, enforce infeasibility and log
+            print(f"[OPTIMAL_SOLVER] WARNING: No available staff can cover hour={hour} on day={day} role={role} (required={required_qty})")
+            model.Add(0 >= required_qty)
     
     # Constraint: Each employee can work max one shift per day
     for emp in eligible_emps:
         eid = emp["id"]
-        emp_shifts = [x[(eid, i)] for i in range(len(shifts))]
+        emp_shifts = emp_shift_vars.get(eid, [])
         model.Add(sum(emp_shifts) <= 1)
     
     # Objective: Minimize total employees used
@@ -93,20 +101,21 @@ def _solve_with_ortools(eligible_emps: List[Dict], shifts: List[Dict],
         eid = emp["id"]
         # Create a variable that is 1 if employee works any shift
         emp_works = model.NewBoolVar(f"emp_works_{eid}")
-        emp_shifts = [x[(eid, i)] for i in range(len(shifts))]
+        emp_shifts = emp_shift_vars.get(eid, [])
         
-        # emp_works = 1 if any shift assigned
-        model.AddMaxEquality(emp_works, emp_shifts)
+        # emp_works = 1 if any shift assigned; else forced to 0
+        if emp_shifts:
+            model.AddMaxEquality(emp_works, emp_shifts)
+        else:
+            model.Add(emp_works == 0)
         employees_used.append(emp_works)
     
     # Minimize employees + small penalty for cost
     total_cost_cents = []
-    for emp in eligible_emps:
-        eid = emp["id"]
-        cost_per_hour = int(emp.get("hourly_cost", 0) * 100)  # Convert to cents
-        for i, shift in enumerate(shifts):
-            hours = shift["duration_h"]
-            total_cost_cents.append(x[(eid, i)] * cost_per_hour * int(hours))
+    cost_cents_by_eid = {emp["id"]: int(emp.get("hourly_cost", 0) * 100) for emp in eligible_emps}
+    for (eid, i), var in x.items():
+        hours = shifts[i]["duration_h"]
+        total_cost_cents.append(var * cost_cents_by_eid.get(eid, 0) * int(hours))
     
     # Primary objective: minimize employees
     # Secondary: minimize cost (much smaller weight)
@@ -130,7 +139,7 @@ def _solve_with_ortools(eligible_emps: List[Dict], shifts: List[Dict],
         for emp in eligible_emps:
             eid = emp["id"]
             for i, shift in enumerate(shifts):
-                if solver.Value(x[(eid, i)]) == 1:
+                if (eid, i) in x and solver.Value(x[(eid, i)]) == 1:
                     assignments.append({
                         "employee_id": eid,
                         "role": role,
@@ -292,7 +301,7 @@ def _group_demand_by_day_role(demand: List[Dict]) -> Dict[Tuple[str, str], List[
     return grouped
 
 
-def _parse_time_range(time_str: str) -> Tuple[int, int]:
+def _parse_time_range(time_str: str) -> Tuple[Optional[int], Optional[int]]:
     """Parse time range to (start_min, end_min)"""
     try:
         if not time_str or "-" not in time_str:
@@ -310,6 +319,24 @@ def _parse_time_range(time_str: str) -> Tuple[int, int]:
         return start_h * 60 + start_m, end_h * 60 + end_m
     except:
         return None, None
+
+
+def _time_ranges_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
+    """Return True if [a_start, a_end) overlaps [b_start, b_end) in minutes."""
+    return max(a_start, b_start) < min(a_end, b_end)
+
+
+def _is_available_for_shift(emp_id: str, day: str, start_min: int, end_min: int, blocked: Dict) -> bool:
+    """Check availability: True if no absence interval overlaps the shift on that day."""
+    day_norm = _normalize_date(day)
+    if not emp_id or not day_norm:
+        return True
+    if emp_id not in blocked or day_norm not in blocked[emp_id]:
+        return True
+    for blocked_start, blocked_end in blocked[emp_id][day_norm]:
+        if _time_ranges_overlap(start_min, end_min, blocked_start, blocked_end):
+            return False
+    return True
 
 
 def _minutes_to_time(minutes: int) -> str:

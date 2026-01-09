@@ -800,6 +800,11 @@ def run_forecast(excel_path: Path | None = None) -> Dict[str, object]:
                 if f_oh and t_oh:
                     ohp = oh.copy()
                     ohp["Date"] = _parse_dates(ohp["Date"])
+                    # Parse From and To columns for ohp
+                    from_col, to_col = _pick_from_to(ohp)
+                    if from_col and to_col:
+                        ohp[from_col] = _to_datetime_time(ohp[from_col])
+                        ohp[to_col] = _to_datetime_time(ohp[to_col])
                     # Use the Modulation drivers by merging on Date/From/To if present, else only Date
                     f_mod, t_mod = _pick_from_to(dfp)
                     if f_mod and t_mod:
@@ -880,7 +885,7 @@ def run_forecast(excel_path: Path | None = None) -> Dict[str, object]:
             if col in oh_out.columns:
                 present_cols.append(col)
         shown_roles = present_cols if len(present_cols) <= 6 else present_cols[:6]
-        preview_df = oh_out[["Date", f_oh, t_oh, "OpenHours"] + shown_roles].drop_duplicates().sort_values(by=["Date", f_oh, t_oh]).head(14)
+        preview_df = oh_out[["Date", f_oh, t_oh, "OpenHours"] + shown_roles].drop_duplicates().sort_values(by=["Date", f_oh, t_oh])
         _pdate_ser = cast(pd.Series, pd.to_datetime(preview_df["Date"], errors="coerce"))
         preview = preview_df.assign(Date=_pdate_ser.dt.strftime("%Y-%m-%d")).to_dict(orient="records")
         updated_dates = sorted(preview_df["Date"].dt.strftime("%Y-%m-%d").unique().tolist() if hasattr(preview_df["Date"], "dt") else sorted(set(d for d in oh_out["Date"])))
@@ -916,7 +921,7 @@ def run_forecast(excel_path: Path | None = None) -> Dict[str, object]:
             for c in list(preds_by_role.keys()):
                 if c in float_wide.columns:
                     float_wide[c] = pd.to_numeric(float_wide[c], errors="coerce").round(2)
-            preview_float = float_wide.sort_values(by=["Date", f_oh, t_oh]).head(14).to_dict(orient="records")
+            preview_float = float_wide.sort_values(by=["Date", f_oh, t_oh]).to_dict(orient="records")
         except Exception:
             # Fallback: build per-role float preview directly from preds_by_role without merging to OH
             preview_float = []
@@ -936,7 +941,7 @@ def run_forecast(excel_path: Path | None = None) -> Dict[str, object]:
                             pass
                         tmp[role_name] = pd.to_numeric(tmp[role_name], errors="coerce").round(2)
                         rows.extend(tmp.sort_values(by=["Date", "From", "To"]).to_dict(orient="records"))
-                preview_float = rows[:14]
+                preview_float = rows
             except Exception:
                 preview_float = []
 
